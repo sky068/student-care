@@ -1,0 +1,6 @@
+data/stumng.sqlite
+data/stumng.sqlite-shm
+data/stumng.sqlite-wal
+node_modules/
+.DS_Store
+.env
