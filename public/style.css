@@ -97,6 +97,15 @@ textarea {
   outline: none;
 }
 
+select {
+  appearance: none;
+  background:
+    linear-gradient(45deg, transparent 50%, var(--muted) 50%) calc(100% - 18px) 50% / 6px 6px no-repeat,
+    linear-gradient(135deg, var(--muted) 50%, transparent 50%) calc(100% - 13px) 50% / 6px 6px no-repeat,
+    #fff;
+  padding-right: 34px;
+}
+
 input[type="checkbox"] {
   width: 20px;
   height: 20px;
