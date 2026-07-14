@@ -297,18 +297,25 @@ function renderApp() {
             <div class="muted">${escapeHtml(state.user.name)} · ${labels[state.user.role]}</div>
           </div>
           <div class="actions">
-            <input id="dateInput" type="date" value="${state.date}" style="width: 160px;" />
+            <div class="date-picker-control">
+              <input id="dateInput" type="date" value="${state.date}" aria-label="工作日期" />
+              <button class="date-picker-button" type="button" data-action="open-date-picker" aria-label="打开日历">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M7 3v3M17 3v3M4 9h16M5 5h14a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1Z" />
+                </svg>
+              </button>
+            </div>
             <button data-action="reload">刷新</button>
             <button data-action="logout">退出</button>
           </div>
         </div>
         <div class="workspace">
           <div>
+            ${state.user.role === "parent" ? renderChildPanel() : ""}
             ${renderAttendancePanel()}
             ${renderTaskPanel()}
           </div>
           <aside class="workspace-aside">
-            ${state.user.role === "teacher" ? renderClassPanel() : renderChildPanel()}
             ${renderLogPanel()}
           </aside>
         </div>
@@ -328,7 +335,7 @@ function renderAdminApp() {
   ];
   app.innerHTML = html`
     <main class="app-shell">
-      <aside class="sidebar">
+      <aside class="sidebar admin-sidebar">
         <h1>管理后台</h1>
         <div class="meta">${escapeHtml(state.user.name)} · 管理员</div>
         <nav class="admin-nav">
@@ -336,7 +343,7 @@ function renderAdminApp() {
         </nav>
       </aside>
       <section class="main">
-        <div class="toolbar">
+        <div class="toolbar admin-toolbar">
           <div>
             <h2 style="margin:0;">${tabs.find(([key]) => key === state.adminTab)?.[1] || "管理后台"}</h2>
             <div class="muted">查看全局数据并处理异常绑定或账号状态。</div>
@@ -366,8 +373,8 @@ function renderAdminUsers() {
     ? state.adminData.users
     : state.adminData.users.filter((user) => user.role === state.adminUserRoleFilter);
   return html`
-    <section class="panel">
-      <div class="toolbar" style="margin-bottom:14px;">
+    <section class="panel admin-users-panel">
+      <div class="toolbar admin-users-toolbar" style="margin-bottom:14px;">
         <div class="field" style="max-width:220px;">
           <label>身份筛选</label>
           <select id="adminUserRoleFilter">
@@ -379,7 +386,28 @@ function renderAdminUsers() {
         </div>
         <div class="muted">共 ${users.length} 个账号</div>
       </div>
-      <div class="table-wrap">
+      <div class="admin-user-list">
+        ${users.map((user) => html`
+          <article class="admin-user-item">
+            <div class="admin-user-heading">
+              <div>
+                <strong>${escapeHtml(user.name)}</strong>
+                <span>${escapeHtml(user.account)}</span>
+              </div>
+              <span class="badge ${user.status === "active" ? "done" : "warn"}">${user.status === "active" ? "启用" : "停用"}</span>
+            </div>
+            <div class="admin-user-meta">
+              <span>${labels[user.role] || user.role}</span>
+              <span>${new Date(user.createdAt).toLocaleString()}</span>
+            </div>
+            <div class="admin-user-actions">
+              <button class="primary" data-reset-password="${user.id}" data-user-name="${escapeAttr(user.name)}" data-user-account="${escapeAttr(user.account)}">修改密码</button>
+              ${user.id === state.user.id ? `<span class="muted">当前账号</span>` : `<button data-user-status="${user.id}" data-status="${user.status === "active" ? "disabled" : "active"}">${user.status === "active" ? "停用账号" : "启用账号"}</button>`}
+            </div>
+          </article>
+        `).join("")}
+      </div>
+      <div class="table-wrap admin-users-table">
         <table class="table">
           <thead>
             <tr><th>姓名</th><th>账号</th><th>身份</th><th>状态</th><th>创建时间</th><th>操作</th></tr>
@@ -553,6 +581,8 @@ function renderAdminLogs() {
 }
 
 function renderSidebar() {
+  const selectedStudent = state.students.find((item) => item.id === state.selectedStudentId) || state.students[0] || null;
+  const selectedClass = state.classes.find((item) => item.id === state.selectedClassId) || state.classes[0] || null;
   const classPicker = state.user.role === "teacher"
     ? html`
       <div class="field">
@@ -560,6 +590,18 @@ function renderSidebar() {
         <select id="classSelect">
           ${state.classes.map((item) => `<option value="${item.id}" ${item.id === state.selectedClassId ? "selected" : ""}>${escapeHtml(item.className)}</option>`).join("")}
         </select>
+        ${selectedClass ? html`
+          <div class="class-quickbar">
+            <div class="class-code-summary">
+              <span>班级编号</span>
+              <strong>${escapeHtml(selectedClass.classCode)}</strong>
+            </div>
+            <div class="class-quick-actions">
+              <button type="button" data-action="copy-class-code" data-class-code="${escapeAttr(selectedClass.classCode)}">复制</button>
+              <button type="button" data-action="show-class-settings">设置</button>
+            </div>
+          </div>
+        ` : ""}
       </div>
     `
     : "";
@@ -570,22 +612,32 @@ function renderSidebar() {
       <div class="meta">${labels[state.user.role]} · ${escapeHtml(state.user.account)}</div>
       ${classPicker}
       <div class="field sidebar-students">
-        <label>${state.user.role === "teacher" ? "班级学生" : "我的孩子"}</label>
-        <div class="list student-list">
-          ${state.students.length ? state.students.map((student) => html`
-            <button class="item student-item ${student.id === state.selectedStudentId ? "active" : ""}" data-student-id="${student.id}" type="button" title="${escapeAttr(`${studentListName(student)} ${studentListMeta(student)}`)}">
-              <span class="student-name">${escapeHtml(studentListName(student))}</span>
-              <span class="student-meta">${escapeHtml(studentListMeta(student))}</span>
+        <label>${state.user.role === "teacher" ? "选择学生" : "选择孩子"}</label>
+        ${state.students.length ? html`
+          <div class="student-combobox" id="studentPicker">
+            <button class="student-picker-trigger" id="studentPickerTrigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-controls="studentPickerDropdown">
+              <span class="student-picker-copy">
+                <strong>${escapeHtml(studentListName(selectedStudent))}</strong>
+                <span>${escapeHtml(studentListMeta(selectedStudent))}</span>
+              </span>
+              <span class="student-picker-chevron" aria-hidden="true">⌄</span>
             </button>
-          `).join("") : `<div class="notice">暂无学生</div>`}
-        </div>
+            <div class="student-picker-dropdown hidden" id="studentPickerDropdown">
+              <input id="studentSearchInput" type="search" placeholder="搜索姓名、编号或备注" autocomplete="off" aria-label="搜索学生" />
+              <div class="student-picker-options" role="listbox" aria-label="学生列表">
+                ${state.students.map((student) => html`
+                  <button class="student-picker-option ${student.id === state.selectedStudentId ? "active" : ""}" data-student-id="${student.id}" data-student-search="${escapeAttr(`${studentListName(student)} ${student.studentNo || ""} ${student.remark || ""} ${studentListMeta(student)}`.toLowerCase())}" type="button" role="option" aria-selected="${student.id === state.selectedStudentId ? "true" : "false"}">
+                    <span class="student-name">${escapeHtml(studentListName(student))}</span>
+                    <span class="student-meta">${escapeHtml(studentListMeta(student))}</span>
+                  </button>
+                `).join("")}
+                <div class="notice student-picker-empty hidden">没有匹配的学生</div>
+              </div>
+            </div>
+          </div>
+        ` : `<div class="notice">暂无学生</div>`}
       </div>
-      ${state.user.role === "teacher" ? html`
-        <div class="actions" style="margin-top:16px;">
-          <button class="primary" data-action="show-create-class">新建班级</button>
-          <button data-action="show-join-class">加入班级</button>
-        </div>
-      ` : html`
+      ${state.user.role === "teacher" ? "" : html`
         <div class="actions" style="margin-top:16px;">
           <button class="primary" data-action="show-bind-child">绑定孩子</button>
         </div>
@@ -699,11 +751,10 @@ function renderTaskPanel() {
 
 function renderClassPanel() {
   const classItem = state.classes.find((item) => item.id === state.selectedClassId);
-  if (!classItem) return `<section class="panel"><h3>班级</h3><div class="notice">暂无班级</div></section>`;
+  if (!classItem) return `<div class="notice">暂无班级</div>`;
   const isOwner = classItem.teacherRole === "owner" || state.user.role === "admin";
   return html`
-    <section class="panel">
-      <h3>班级设置</h3>
+    <div class="class-settings-content">
       <div class="item">
         <div class="item-title">
           <span>${escapeHtml(classItem.className)}</span>
@@ -733,15 +784,124 @@ function renderClassPanel() {
           `).join("")}
         </div>
       ` : ""}
-    </section>
+    </div>
   `;
+}
+
+function renderCreateClassDialog() {
+  const dialog = document.createElement("div");
+  dialog.className = "modal-backdrop";
+  dialog.innerHTML = html`
+    <div class="modal">
+      <div class="item-title">
+        <h3 style="margin:0;">新建班级</h3>
+        <button class="text" type="button" data-modal-close>关闭</button>
+      </div>
+      <form id="createClassDialogForm" class="form-grid" style="margin-top:14px;">
+        <div class="field">
+          <label>班级名称</label>
+          <input name="className" placeholder="例如：一年级一班" required />
+        </div>
+        <div class="field">
+          <label>年级</label>
+          <input name="grade" placeholder="选填" />
+        </div>
+        <button class="primary" type="submit">创建班级</button>
+      </form>
+    </div>
+  `;
+  document.body.appendChild(dialog);
+  dialog.querySelector("[data-modal-close]").addEventListener("click", () => dialog.remove());
+  dialog.addEventListener("click", (event) => {
+    if (event.target === dialog) dialog.remove();
+  });
+  dialog.querySelector("#createClassDialogForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      const result = await api("/api/classes", { method: "POST", body: formData(event.currentTarget) });
+      state.selectedClassId = result.class.id;
+      state.selectedStudentId = "";
+      toast("班级已创建");
+      dialog.remove();
+      await loadWorkspaceData();
+      renderApp();
+    } catch (error) {
+      toast(error.message);
+    }
+  });
+  dialog.querySelector("input")?.focus();
+}
+
+function renderClassSettingsDialog() {
+  const dialog = document.createElement("div");
+  dialog.className = "modal-backdrop";
+  dialog.innerHTML = html`
+    <div class="modal class-settings-modal">
+      <div class="item-title">
+        <h3 style="margin:0;">班级设置</h3>
+        <button class="text" type="button" data-modal-close>关闭</button>
+      </div>
+      <div class="class-settings-scroll">
+        ${renderClassPanel()}
+      </div>
+      <div class="class-entry-actions">
+        <button type="button" data-action="show-create-class">新建班级</button>
+        <button type="button" data-action="show-join-class">加入班级</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(dialog);
+  dialog.querySelector("[data-modal-close]").addEventListener("click", () => dialog.remove());
+  dialog.addEventListener("click", (event) => {
+    if (event.target === dialog) dialog.remove();
+  });
+  dialog.querySelector("[data-action='refresh-class-code']")?.addEventListener("click", async () => {
+    try {
+      await api(`/api/classes/${state.selectedClassId}/code/refresh`, { method: "POST" });
+      toast("班级编号已刷新");
+      dialog.remove();
+      await loadWorkspaceData();
+      renderApp();
+    } catch (error) {
+      toast(error.message);
+    }
+  });
+  dialog.querySelector("[data-action='disable-class-code']")?.addEventListener("click", async () => {
+    const confirmed = window.confirm("确定要停用当前班级编号吗？停用后家长和协同教师将无法继续使用该编号加入。");
+    if (!confirmed) return;
+    try {
+      await api(`/api/classes/${state.selectedClassId}/code/disable`, { method: "POST" });
+      toast("班级编号已停用");
+      dialog.remove();
+      await loadWorkspaceData();
+      renderApp();
+    } catch (error) {
+      toast(error.message);
+    }
+  });
+  dialog.querySelector("[data-action='copy-class-code']")?.addEventListener("click", async (event) => {
+    try {
+      await copyText(event.currentTarget.dataset.classCode);
+      toast("班级编号已复制");
+    } catch {
+      toast("复制失败，请手动复制编号");
+    }
+  });
+  dialog.querySelector("[data-action='show-create-class']").addEventListener("click", () => {
+    dialog.remove();
+    renderCreateClassDialog();
+  });
+  dialog.querySelector("[data-action='show-join-class']").addEventListener("click", () => {
+    dialog.remove();
+    renderJoinClassDialog();
+  });
 }
 
 function renderChildPanel() {
   const student = state.students.find((item) => item.id === state.selectedStudentId);
   return html`
     <section class="panel">
-      <h3>孩子信息</h3>
+      <h2>孩子信息</h2>
       ${student ? html`
         <div class="item">
           <div class="item-title">
@@ -758,7 +918,7 @@ function renderChildPanel() {
 function renderLogPanel() {
   return html`
     <section class="panel log-panel">
-      <h3>操作日志</h3>
+      <h2>操作日志</h2>
       <div class="list log-list">
         ${state.logs.length ? state.logs.map((log) => html`
           <div class="item">
@@ -1145,6 +1305,52 @@ function bindAdminEvents() {
 function bindAppEvents() {
   bindGlobalActions();
 
+  const studentPicker = document.querySelector("#studentPicker");
+  const studentPickerTrigger = document.querySelector("#studentPickerTrigger");
+  const studentPickerDropdown = document.querySelector("#studentPickerDropdown");
+  const studentSearchInput = document.querySelector("#studentSearchInput");
+  const datePickerControl = document.querySelector(".date-picker-control");
+  const dateInput = document.querySelector("#dateInput");
+  const closeStudentPicker = () => {
+    studentPickerDropdown?.classList.add("hidden");
+    studentPicker?.classList.remove("open");
+    studentPickerTrigger?.setAttribute("aria-expanded", "false");
+  };
+
+  studentPickerTrigger?.addEventListener("click", () => {
+    const opening = studentPickerDropdown.classList.contains("hidden");
+    studentPickerDropdown.classList.toggle("hidden", !opening);
+    studentPicker.classList.toggle("open", opening);
+    studentPickerTrigger.setAttribute("aria-expanded", String(opening));
+    if (opening) {
+      studentSearchInput.value = "";
+      studentSearchInput.dispatchEvent(new Event("input"));
+      studentSearchInput.focus();
+    }
+  });
+
+  studentSearchInput?.addEventListener("input", () => {
+    const query = studentSearchInput.value.trim().toLowerCase();
+    let matches = 0;
+    studentPicker.querySelectorAll("[data-student-search]").forEach((option) => {
+      const matched = option.dataset.studentSearch.includes(query);
+      option.hidden = !matched;
+      if (matched) matches += 1;
+    });
+    studentPicker.querySelector(".student-picker-empty")?.classList.toggle("hidden", matches > 0);
+  });
+
+  studentPickerDropdown?.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    closeStudentPicker();
+    studentPickerTrigger.focus();
+  });
+
+  app.onpointerdown = (event) => {
+    if (studentPicker && !studentPicker.contains(event.target)) closeStudentPicker();
+    if (dateInput && datePickerControl && !datePickerControl.contains(event.target)) dateInput.blur();
+  };
+
   document.querySelector("[data-action='reload']")?.addEventListener("click", async () => {
     try {
       await loadWorkspaceData();
@@ -1155,10 +1361,20 @@ function bindAppEvents() {
     }
   });
 
-  document.querySelector("#dateInput")?.addEventListener("change", async (event) => {
+  dateInput?.addEventListener("change", async (event) => {
     state.date = event.currentTarget.value;
     await loadWorkspaceData();
     renderApp();
+  });
+
+  document.querySelector("[data-action='open-date-picker']")?.addEventListener("click", () => {
+    dateInput.focus({ preventScroll: true });
+    try {
+      if (typeof dateInput.showPicker === "function") dateInput.showPicker();
+      else dateInput.click();
+    } catch {
+      dateInput.click();
+    }
   });
 
   document.querySelector("#classSelect")?.addEventListener("change", async (event) => {
@@ -1170,6 +1386,7 @@ function bindAppEvents() {
 
   document.querySelectorAll("[data-student-id]").forEach((button) => {
     button.addEventListener("click", async () => {
+      closeStudentPicker();
       state.selectedStudentId = button.dataset.studentId;
       await loadWorkspaceData();
       renderApp();
@@ -1283,30 +1500,6 @@ function bindAppEvents() {
     });
   });
 
-  document.querySelector("[data-action='refresh-class-code']")?.addEventListener("click", async () => {
-    try {
-      await api(`/api/classes/${state.selectedClassId}/code/refresh`, { method: "POST" });
-      toast("班级编号已刷新");
-      await loadWorkspaceData();
-      renderApp();
-    } catch (error) {
-      toast(error.message);
-    }
-  });
-
-  document.querySelector("[data-action='disable-class-code']")?.addEventListener("click", async () => {
-    const confirmed = window.confirm("确定要停用当前班级编号吗？停用后家长和协同教师将无法继续使用该编号加入。");
-    if (!confirmed) return;
-    try {
-      await api(`/api/classes/${state.selectedClassId}/code/disable`, { method: "POST" });
-      toast("班级编号已停用");
-      await loadWorkspaceData();
-      renderApp();
-    } catch (error) {
-      toast(error.message);
-    }
-  });
-
   document.querySelector("[data-action='copy-class-code']")?.addEventListener("click", async (event) => {
     try {
       await copyText(event.currentTarget.dataset.classCode);
@@ -1316,8 +1509,7 @@ function bindAppEvents() {
     }
   });
 
-  document.querySelector("[data-action='show-create-class']")?.addEventListener("click", () => renderTeacherOnboarding());
-  document.querySelector("[data-action='show-join-class']")?.addEventListener("click", () => renderJoinClassDialog());
+  document.querySelector("[data-action='show-class-settings']")?.addEventListener("click", () => renderClassSettingsDialog());
   document.querySelector("[data-action='show-bind-child']")?.addEventListener("click", () => renderParentOnboarding());
 }
 

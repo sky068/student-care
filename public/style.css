@@ -78,6 +78,15 @@ button.danger:hover {
   background: #96362d;
 }
 
+button.danger:disabled,
+button.danger:disabled:hover {
+  cursor: not-allowed;
+  border-color: var(--line);
+  background: #eef1ec;
+  color: #9aa39a;
+  transform: none;
+}
+
 button.text {
   border-color: transparent;
   background: transparent;
@@ -321,6 +330,52 @@ textarea:focus {
   margin-bottom: 18px;
 }
 
+.date-picker-control {
+  position: relative;
+  width: 168px;
+}
+
+.date-picker-control input {
+  width: 100%;
+  padding-right: 44px;
+}
+
+.date-picker-control input::-webkit-calendar-picker-indicator {
+  opacity: 0;
+}
+
+.date-picker-control .date-picker-button {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 40px;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+  padding: 0;
+}
+
+.date-picker-control .date-picker-button:hover {
+  border-color: transparent;
+  background: var(--accent-weak);
+  color: var(--accent);
+  transform: none;
+}
+
+.date-picker-button svg {
+  width: 19px;
+  height: 19px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .workspace {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 360px;
@@ -344,6 +399,41 @@ textarea:focus {
   flex-direction: column;
 }
 
+.class-quickbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  margin-top: 8px;
+  padding: 9px 0 2px;
+}
+
+.class-code-summary span,
+.class-code-summary strong {
+  display: block;
+}
+
+.class-code-summary span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.class-code-summary strong {
+  margin-top: 2px;
+  font-size: 15px;
+  letter-spacing: 0.04em;
+}
+
+.class-quick-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.class-quick-actions button {
+  min-height: 34px;
+  padding: 0 10px;
+}
+
 .student-list,
 .log-list {
   min-height: 0;
@@ -353,6 +443,101 @@ textarea:focus {
 
 .student-list {
   flex: 1;
+}
+
+.student-combobox {
+  position: relative;
+}
+
+.student-picker-trigger {
+  width: 100%;
+  min-height: 62px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 9px 11px;
+  text-align: left;
+}
+
+.student-picker-copy {
+  min-width: 0;
+}
+
+.student-picker-copy strong,
+.student-picker-copy span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.student-picker-copy span {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.student-picker-chevron {
+  color: var(--muted);
+  font-size: 22px;
+  line-height: 1;
+  transition: transform 0.16s ease;
+}
+
+.student-combobox.open .student-picker-trigger {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-weak);
+}
+
+.student-combobox.open .student-picker-chevron {
+  transform: rotate(180deg);
+}
+
+.student-picker-dropdown {
+  position: absolute;
+  z-index: 16;
+  top: calc(100% + 6px);
+  right: 0;
+  left: 0;
+  padding: 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 18px 38px rgba(31, 38, 32, 0.16);
+}
+
+.student-picker-options {
+  display: grid;
+  gap: 4px;
+  max-height: min(320px, 48vh);
+  margin-top: 8px;
+  overflow-y: auto;
+}
+
+.student-picker-option {
+  width: 100%;
+  min-height: 58px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  border-color: transparent;
+  text-align: left;
+}
+
+.student-picker-option:hover,
+.student-picker-option.active {
+  border-color: var(--accent);
+  background: var(--accent-weak);
+}
+
+.student-picker-option[hidden] {
+  display: none;
+}
+
+.student-picker-empty {
+  margin: 4px 0 0;
 }
 
 .student-item {
@@ -415,14 +600,8 @@ textarea:focus {
 .panel h3 {
   margin: 0 0 14px;
   letter-spacing: 0;
-}
-
-.panel h2 {
-  font-size: 20px;
-}
-
-.panel h3 {
-  font-size: 16px;
+  font-size: 18px;
+  font-weight: 600;
 }
 
 .muted {
@@ -564,6 +743,10 @@ textarea:focus {
   color: var(--accent);
 }
 
+.admin-user-list {
+  display: none;
+}
+
 .toast.show {
   opacity: 1;
   transform: translateY(0);
@@ -586,6 +769,32 @@ textarea:focus {
   background: var(--surface);
   box-shadow: var(--shadow);
   padding: 18px;
+}
+
+.class-settings-modal {
+  width: min(520px, 100%);
+  max-height: min(760px, calc(100vh - 36px));
+  display: flex;
+  flex-direction: column;
+}
+
+.class-settings-scroll {
+  min-height: 0;
+  margin-top: 16px;
+  overflow-y: auto;
+}
+
+.class-settings-content h3 {
+  margin: 18px 0 10px;
+}
+
+.class-entry-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
 }
 
 .hidden {
@@ -639,9 +848,61 @@ textarea:focus {
 }
 
 @media (max-width: 640px) {
+  button {
+    min-height: 44px;
+  }
+
+  input,
+  select,
+  textarea {
+    min-height: 44px;
+  }
+
   .two-col,
   .three-col {
     grid-template-columns: 1fr;
+  }
+
+  .admin-sidebar {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    padding: 14px 16px 12px;
+    background: rgba(251, 252, 250, 0.96);
+    -webkit-backdrop-filter: blur(12px);
+    backdrop-filter: blur(12px);
+  }
+
+  .sidebar h1 {
+    font-size: 18px;
+  }
+
+  .sidebar .meta {
+    margin-bottom: 12px;
+  }
+
+  .admin-nav {
+    display: flex;
+    gap: 8px;
+    margin: 0 -16px;
+    padding: 0 16px 2px;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+
+  .admin-nav::-webkit-scrollbar {
+    display: none;
+  }
+
+  .admin-nav button {
+    flex: 0 0 auto;
+    min-height: 40px;
+    white-space: nowrap;
+  }
+
+  .main {
+    padding: 14px 12px 24px;
   }
 
   .toolbar {
@@ -651,5 +912,148 @@ textarea:focus {
   .toolbar > *,
   .actions button {
     width: 100%;
+  }
+
+  .admin-toolbar .actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .admin-toolbar .actions button {
+    width: auto;
+  }
+
+  .admin-users-panel {
+    border-right: 0;
+    border-left: 0;
+    border-radius: 0;
+    box-shadow: none;
+    margin: 0 -12px;
+    padding: 16px;
+  }
+
+  .admin-users-toolbar .field {
+    max-width: none !important;
+  }
+
+  .admin-users-table {
+    display: none;
+  }
+
+  .admin-user-list {
+    display: grid;
+  }
+
+  .admin-user-item {
+    padding: 16px 0;
+    border-top: 1px solid var(--line);
+  }
+
+  .admin-user-item:last-child {
+    padding-bottom: 0;
+  }
+
+  .admin-user-heading,
+  .admin-user-actions,
+  .admin-user-meta {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .admin-user-heading {
+    justify-content: space-between;
+  }
+
+  .admin-user-heading strong,
+  .admin-user-heading span {
+    display: block;
+  }
+
+  .admin-user-heading strong {
+    font-size: 16px;
+  }
+
+  .admin-user-heading > div > span {
+    margin-top: 3px;
+    color: var(--muted);
+    font-size: 13px;
+  }
+
+  .admin-user-meta {
+    margin-top: 10px;
+    color: var(--muted);
+    font-size: 13px;
+  }
+
+  .admin-user-meta span + span::before {
+    content: "·";
+    margin-right: 10px;
+  }
+
+  .admin-user-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    margin-top: 14px;
+  }
+
+  .admin-user-actions button {
+    width: 100%;
+  }
+
+  .admin-user-actions > .muted {
+    align-self: center;
+    text-align: center;
+    font-size: 13px;
+  }
+
+  .modal-backdrop {
+    place-items: end center;
+    padding: 0;
+    background: rgba(31, 38, 32, 0.46);
+  }
+
+  .modal {
+    width: 100%;
+    max-height: calc(100svh - 24px);
+    overflow-y: auto;
+    border-width: 1px 0 0;
+    border-radius: 16px 16px 0 0;
+    padding: 20px 16px calc(18px + env(safe-area-inset-bottom));
+    animation: modal-rise 180ms ease-out;
+  }
+
+  .class-settings-modal {
+    max-height: calc(100svh - 24px);
+  }
+
+  .modal form button[type="submit"] {
+    min-height: 48px;
+  }
+
+  .toast {
+    right: 12px;
+    bottom: calc(12px + env(safe-area-inset-bottom));
+    left: 12px;
+    max-width: none;
+  }
+}
+
+@keyframes modal-rise {
+  from {
+    transform: translateY(18px);
+    opacity: 0;
+  }
+
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modal {
+    animation: none;
   }
 }
