@@ -647,6 +647,52 @@ textarea:focus {
   line-height: 1.5;
 }
 
+.task-list {
+  gap: 10px;
+}
+
+.task-card {
+  padding: 14px;
+  border-color: var(--line-strong);
+  background: #fafbf9;
+  box-shadow: 0 2px 8px rgba(31, 38, 32, 0.05);
+}
+
+.task-audit {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 12px 0 0;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.task-audit div,
+.task-audit dd {
+  min-width: 0;
+}
+
+.task-audit dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.task-audit dd {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 8px;
+  margin: 3px 0 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.task-audit time {
+  color: var(--muted);
+  font-weight: 400;
+  white-space: nowrap;
+}
+
 .badge {
   display: inline-flex;
   align-items: center;
@@ -861,6 +907,23 @@ textarea:focus {
   .two-col,
   .three-col {
     grid-template-columns: 1fr;
+  }
+
+  .task-audit {
+    grid-template-columns: 1fr;
+    gap: 7px;
+  }
+
+  .task-audit div {
+    display: grid;
+    grid-template-columns: 68px minmax(0, 1fr);
+    align-items: baseline;
+    gap: 8px;
+  }
+
+  .task-audit dd {
+    justify-content: space-between;
+    margin: 0;
   }
 
   .admin-sidebar {

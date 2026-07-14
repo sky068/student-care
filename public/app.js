@@ -78,6 +78,19 @@ function label(value) {
   return labels[value] || value;
 }
 
+function formatTaskTimestamp(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  });
+}
+
 function studentListName(student) {
   return student.name || student.displayName || "未命名学生";
 }
@@ -711,14 +724,30 @@ function renderTaskPanel() {
           <button class="primary" type="submit">添加</button>
         </form>
       ` : ""}
-      <div class="list" style="margin-top:14px;">
+      <div class="list task-list" style="margin-top:14px;">
         ${state.tasks.length ? state.tasks.map((task) => html`
-          <div class="item">
+          <div class="item task-card">
             <div class="item-title">
               <span>${escapeHtml(task.title)}</span>
               <span class="badge ${getTaskStatus(task) === "completed" ? "done" : "todo"}">${labels[getTaskStatus(task)]}</span>
             </div>
             <p>${escapeHtml(task.content || "无任务说明")}</p>
+            <dl class="task-audit">
+              <div>
+                <dt>创建人</dt>
+                <dd>${escapeHtml(task.createdByUser?.name || "未知用户")}<time>${escapeHtml(formatTaskTimestamp(task.createdAt))}</time></dd>
+              </div>
+              <div>
+                <dt>最后修改</dt>
+                <dd>${escapeHtml(task.lastModifiedByUser?.name || task.createdByUser?.name || "未知用户")}<time>${escapeHtml(formatTaskTimestamp(task.updatedAt))}</time></dd>
+              </div>
+              ${getTaskStatus(task) === "completed" ? html`
+                <div>
+                  <dt>完成确认</dt>
+                  <dd>${escapeHtml(task.completedByUser?.name || "托管老师")}<time>${escapeHtml(formatTaskTimestamp(task.completedAt))}</time></dd>
+                </div>
+              ` : ""}
+            </dl>
             ${canRemark ? html`
               <div class="task-remark-editor">
                 <div class="task-remark-header">

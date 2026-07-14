@@ -192,6 +192,7 @@ for (const spec of studentSpecs) {
       status: "pending",
       completed: false,
       createdBy: parent.id,
+      lastModifiedBy: parent.id,
       completedBy: null,
       completedAt: null,
       deleted: false,

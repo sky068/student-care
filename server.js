@@ -368,12 +368,33 @@ function taskStatus(task) {
   return task.completed ? "completed" : "pending";
 }
 
-function decorateTask(task) {
+function taskActor(db, userId, fallbackLog = null) {
+  const user = db.users.find((item) => item.id === userId);
+  if (!user && !fallbackLog) return null;
+  return {
+    id: user?.id || userId || fallbackLog.operatorUserId,
+    name: user?.name || fallbackLog.operatorName || "未知用户",
+    role: user?.role || fallbackLog.operatorRole || ""
+  };
+}
+
+function decorateTask(db, task) {
   const status = taskStatus(task);
+  const taskLogs = db.operationLogs
+    .filter((item) => item.objectType === "task" && item.objectId === task.id)
+    .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  const createLog = taskLogs.find((item) => item.action === "create_task") || null;
+  const completionLog = taskLogs.find((item) => item.action === "complete_task") || null;
+  const latestLog = taskLogs[0] || null;
+  const lastModifiedBy = task.lastModifiedBy || latestLog?.operatorUserId || task.createdBy;
   return {
     ...task,
     status,
-    completed: status === "completed"
+    completed: status === "completed",
+    lastModifiedBy,
+    createdByUser: taskActor(db, task.createdBy, createLog),
+    lastModifiedByUser: taskActor(db, lastModifiedBy, latestLog),
+    completedByUser: task.completedBy ? taskActor(db, task.completedBy, completionLog) : null
   };
 }
 
@@ -807,7 +828,7 @@ async function handleApi(req, res, pathname, searchParams) {
     if (!canAccessStudent(db, user, studentId)) fail(403, "没有学生权限");
     const tasks = db.dailyTasks
       .filter((item) => item.studentId === studentId && item.date === date && !item.deleted)
-      .map(decorateTask);
+      .map((task) => decorateTask(db, task));
     return send(res, 200, { tasks });
   }
 
@@ -829,6 +850,7 @@ async function handleApi(req, res, pathname, searchParams) {
       status: "pending",
       completed: false,
       createdBy: user.id,
+      lastModifiedBy: user.id,
       completedBy: null,
       completedAt: null,
       deleted: false,
@@ -838,7 +860,7 @@ async function handleApi(req, res, pathname, searchParams) {
     db.dailyTasks.push(task);
     logOperation(db, req, user, "create_task", "task", task.id, null, task, { studentId, date });
     await writeDb(db);
-    return send(res, 201, { task: decorateTask(task) });
+    return send(res, 201, { task: decorateTask(db, task) });
   }
 
   const taskById = pathname.match(/^\/api\/tasks\/([^/]+)$/);
@@ -851,10 +873,11 @@ async function handleApi(req, res, pathname, searchParams) {
     const before = { ...task };
     task.title = String(body.title || task.title).trim();
     task.content = String(body.content ?? task.content).trim();
+    task.lastModifiedBy = user.id;
     task.updatedAt = now();
     logOperation(db, req, user, "update_task", "task", task.id, before, task, { studentId: task.studentId, date: task.date });
     await writeDb(db);
-    return send(res, 200, { task: decorateTask(task) });
+    return send(res, 200, { task: decorateTask(db, task) });
   }
 
   const taskTeacherRemark = pathname.match(/^\/api\/tasks\/([^/]+)\/teacher-remark$/);
@@ -867,10 +890,11 @@ async function handleApi(req, res, pathname, searchParams) {
     task.teacherRemark = String(body.teacherRemark || "").trim();
     task.teacherRemarkBy = task.teacherRemark ? user.id : null;
     task.teacherRemarkAt = task.teacherRemark ? now() : null;
+    task.lastModifiedBy = user.id;
     task.updatedAt = now();
     logOperation(db, req, user, "update_task_teacher_remark", "task", task.id, before, task, { studentId: task.studentId, date: task.date });
     await writeDb(db);
-    return send(res, 200, { task: decorateTask(task) });
+    return send(res, 200, { task: decorateTask(db, task) });
   }
 
   if (taskById && req.method === "DELETE") {
@@ -881,10 +905,11 @@ async function handleApi(req, res, pathname, searchParams) {
     if (user.role === "parent" && (task.createdBy !== user.id || taskStatus(task) === "completed")) fail(403, "只能删除自己创建且待完成的任务");
     const before = { ...task };
     task.deleted = true;
+    task.lastModifiedBy = user.id;
     task.updatedAt = now();
     logOperation(db, req, user, "delete_task", "task", task.id, before, task, { studentId: task.studentId, date: task.date });
     await writeDb(db);
-    return send(res, 200, { task: decorateTask(task) });
+    return send(res, 200, { task: decorateTask(db, task) });
   }
 
   const taskCompletion = pathname.match(/^\/api\/tasks\/([^/]+)\/completion$/);
@@ -899,10 +924,11 @@ async function handleApi(req, res, pathname, searchParams) {
     task.completed = status === "completed";
     task.completedBy = task.completed ? user.id : null;
     task.completedAt = task.completed ? now() : null;
+    task.lastModifiedBy = user.id;
     task.updatedAt = now();
     logOperation(db, req, user, task.completed ? "complete_task" : "mark_task_pending", "task", task.id, before, task, { studentId: task.studentId, date: task.date });
     await writeDb(db);
-    return send(res, 200, { task: decorateTask(task) });
+    return send(res, 200, { task: decorateTask(db, task) });
   }
 
   if (key === "GET /api/operation-logs") {
