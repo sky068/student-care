@@ -34,6 +34,7 @@ const labels = {
   create_class: "创建班级",
   join_class_by_code: "通过班级编号加入班级",
   update_user_status: "更新用户状态",
+  reset_user_password: "重置用户密码",
   refresh_class_code: "刷新班级编号",
   disable_class_code: "停用班级编号",
   remove_student: "移除学生",
@@ -392,7 +393,10 @@ function renderAdminUsers() {
                 <td><span class="badge ${user.status === "active" ? "done" : "warn"}">${user.status === "active" ? "启用" : "停用"}</span></td>
                 <td>${new Date(user.createdAt).toLocaleString()}</td>
                 <td>
-                  ${user.id === state.user.id ? `<span class="muted">当前账号</span>` : `<button data-user-status="${user.id}" data-status="${user.status === "active" ? "disabled" : "active"}">${user.status === "active" ? "停用" : "启用"}</button>`}
+                  <div class="actions">
+                    <button data-reset-password="${user.id}" data-user-name="${escapeAttr(user.name)}" data-user-account="${escapeAttr(user.account)}">修改密码</button>
+                    ${user.id === state.user.id ? `<span class="muted">当前账号</span>` : `<button data-user-status="${user.id}" data-status="${user.status === "active" ? "disabled" : "active"}">${user.status === "active" ? "停用" : "启用"}</button>`}
+                  </div>
                 </td>
               </tr>
             `).join("")}
@@ -914,6 +918,69 @@ function renderBindParentDialog(studentId, studentName) {
   dialog.querySelector("input")?.focus();
 }
 
+function renderResetPasswordDialog(userId, userName, userAccount) {
+  const isCurrentUser = userId === state.user.id;
+  const dialog = document.createElement("div");
+  dialog.className = "modal-backdrop";
+  dialog.innerHTML = html`
+    <div class="modal">
+      <div class="item-title">
+        <h3 style="margin:0;">修改用户密码</h3>
+        <button class="text" type="button" data-modal-close>关闭</button>
+      </div>
+      <div class="muted" style="margin-top:8px;">${escapeHtml(userName)} · ${escapeHtml(userAccount)}</div>
+      <form id="resetPasswordForm" class="form-grid" style="margin-top:14px;">
+        <div class="field">
+          <label>新密码</label>
+          <input name="newPassword" type="password" minlength="6" maxlength="128" autocomplete="new-password" required />
+        </div>
+        <div class="field">
+          <label>确认新密码</label>
+          <input name="confirmPassword" type="password" minlength="6" maxlength="128" autocomplete="new-password" required />
+        </div>
+        <div class="notice">修改后，该用户已登录的设备将全部退出。${isCurrentUser ? "当前管理账号也会退出，请使用新密码重新登录。" : ""}</div>
+        <button class="primary" type="submit">确认修改</button>
+      </form>
+    </div>
+  `;
+  document.body.appendChild(dialog);
+  dialog.querySelector("[data-modal-close]").addEventListener("click", () => dialog.remove());
+  dialog.addEventListener("click", (event) => {
+    if (event.target === dialog) dialog.remove();
+  });
+  dialog.querySelector("#resetPasswordForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const data = formData(event.currentTarget);
+    if (data.newPassword !== data.confirmPassword) {
+      toast("两次输入的密码不一致");
+      return;
+    }
+    const submitButton = event.currentTarget.querySelector("button[type='submit']");
+    submitButton.disabled = true;
+    try {
+      await api(`/api/users/${userId}/password`, {
+        method: "PATCH",
+        body: { newPassword: data.newPassword }
+      });
+      dialog.remove();
+      if (isCurrentUser) {
+        setToken("");
+        state.user = null;
+        renderAuth();
+        toast("密码已修改，请使用新密码重新登录");
+        return;
+      }
+      toast("密码已修改，该用户的登录已退出");
+      await loadWorkspaceData();
+      renderAdminApp();
+    } catch (error) {
+      submitButton.disabled = false;
+      toast(error.message);
+    }
+  });
+  dialog.querySelector("input")?.focus();
+}
+
 function renderParentOnboarding() {
   app.innerHTML = html`
     <main class="auth-shell">
@@ -980,8 +1047,13 @@ function bindAdminEvents() {
   bindGlobalActions();
 
   document.querySelector("[data-action='reload']")?.addEventListener("click", async () => {
-    await loadWorkspaceData();
-    renderAdminApp();
+    try {
+      await loadWorkspaceData();
+      renderAdminApp();
+      toast("刷新成功");
+    } catch (error) {
+      toast(error.message);
+    }
   });
 
   document.querySelectorAll("[data-admin-tab]").forEach((button) => {
@@ -1014,6 +1086,16 @@ function bindAdminEvents() {
       } catch (error) {
         toast(error.message);
       }
+    });
+  });
+
+  document.querySelectorAll("[data-reset-password]").forEach((button) => {
+    button.addEventListener("click", () => {
+      renderResetPasswordDialog(
+        button.dataset.resetPassword,
+        button.dataset.userName,
+        button.dataset.userAccount
+      );
     });
   });
 
@@ -1064,8 +1146,13 @@ function bindAppEvents() {
   bindGlobalActions();
 
   document.querySelector("[data-action='reload']")?.addEventListener("click", async () => {
-    await loadWorkspaceData();
-    renderApp();
+    try {
+      await loadWorkspaceData();
+      renderApp();
+      toast("刷新成功");
+    } catch (error) {
+      toast(error.message);
+    }
   });
 
   document.querySelector("#dateInput")?.addEventListener("change", async (event) => {

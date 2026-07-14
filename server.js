@@ -538,6 +538,26 @@ async function handleApi(req, res, pathname, searchParams) {
     return send(res, 200, { user: cleanUser(target) });
   }
 
+  const userPassword = pathname.match(/^\/api\/users\/([^/]+)\/password$/);
+  if (req.method === "PATCH" && userPassword) {
+    requireRole(user, ["admin"]);
+    const target = db.users.find((item) => item.id === userPassword[1]);
+    if (!target) fail(404, "用户不存在");
+    const newPassword = String(body.newPassword || "");
+    if (newPassword.length < 6) fail(400, "新密码至少需要 6 位");
+    if (newPassword.length > 128) fail(400, "新密码不能超过 128 位");
+    target.passwordHash = hashPassword(newPassword);
+    target.updatedAt = now();
+    db.sessions = db.sessions.filter((item) => item.userId !== target.id);
+    logOperation(db, req, user, "reset_user_password", "user", target.id, null, {
+      id: target.id,
+      account: target.account,
+      passwordResetAt: target.updatedAt
+    });
+    await writeDb(db);
+    return send(res, 200, { user: cleanUser(target) });
+  }
+
   const classCodeRefresh = pathname.match(/^\/api\/classes\/([^/]+)\/code\/refresh$/);
   if (req.method === "POST" && classCodeRefresh) {
     requireRole(user, ["teacher", "admin"]);
