@@ -1296,21 +1296,6 @@ async function handleApi(req, res, pathname, searchParams, body = {}) {
     return send(res, 200, { student: decorateStudentForAdmin(student, db) });
   }
 
-  const studentRemark = pathname.match(/^\/api\/students\/([^/]+)\/remark$/);
-  if (req.method === "PATCH" && studentRemark) {
-    requireRole(user, ["parent", "teacher", "admin"]);
-    const student = db.students.find((item) => item.id === studentRemark[1] && item.status !== "removed");
-    if (!student) fail(404, "学生不存在");
-    if (!canAccessStudent(db, user, student.id)) fail(403, "没有学生权限");
-    const remark = textInput(body.remark, "备注", 500);
-    const before = { ...student };
-    student.remark = remark;
-    student.updatedAt = now();
-    logOperation(db, req, user, "update_student_remark", "student", student.id, before, student, { studentId: student.id });
-    await writeDb(db);
-    return send(res, 200, { student });
-  }
-
   if (key === "POST /api/parent-student-relations") {
     requireRole(user, ["admin"]);
     const parentAccount = String(body.parentAccount || "").trim();

@@ -228,20 +228,12 @@ test("关键权限、并发和输入边界", async () => {
   assert.equal(result.body.class.teacherInviteCode, undefined, "家长响应不能泄露教师邀请码");
   assert.equal(result.body.student.remark, "花生过敏", "家长填写的备注应保存到孩子信息");
   const studentId = result.body.student.id;
-
   result = await request(`/api/students/${studentId}/remark`, {
     token: parentToken,
     method: "PATCH",
-    body: { remark: "下午由外婆接送" }
+    body: { remark: "不应允许后续修改" }
   });
-  assert.equal(result.response.status, 200);
-  assert.equal(result.body.student.remark, "下午由外婆接送");
-  result = await request(`/api/students/${studentId}/remark`, {
-    token: outsiderToken,
-    method: "PATCH",
-    body: { remark: "越权修改" }
-  });
-  assert.equal(result.response.status, 403, "无绑定关系的家长不能修改孩子备注");
+  assert.equal(result.response.status, 404, "孩子备注只在添加时填写，不提供后续修改接口");
 
   const taskResults = await Promise.all(["任务一", "任务二"].map((title) => request("/api/tasks", {
     token: parentToken,

@@ -69,7 +69,6 @@ const labels = {
   remove_student: "移除学生",
   bind_student_by_class_code: "通过班级编号绑定学生",
   update_student_status: "更新学生状态",
-  update_student_remark: "修改孩子备注",
   create_parent_student_relation: "绑定家长学生关系",
   unbind_parent_student: "解绑家长学生关系",
   create_attendance: "创建出勤",
@@ -1524,13 +1523,7 @@ function renderChildPanel() {
             <span>${escapeHtml(student.name)}</span>
             <span class="badge">${escapeHtml(student.class?.className || "班级")}</span>
           </div>
-          <form id="childRemarkForm" class="form-grid" data-student-id="${escapeAttr(student.id)}" style="margin-top:12px;">
-            <div class="field">
-              <label for="childRemark">备注</label>
-              <textarea id="childRemark" name="remark" maxlength="500" placeholder="选填，例如过敏信息或接送说明">${escapeHtml(student.remark || "")}</textarea>
-            </div>
-            <button type="submit">保存备注</button>
-          </form>
+          <p>备注：${escapeHtml(student.remark || "未填写")}</p>
         </div>
       ` : `<div class="notice">暂无绑定孩子</div>`}
     </section>
@@ -2164,24 +2157,6 @@ function bindAppEvents() {
       await loadWorkspaceData();
       renderApp();
     } catch (error) {
-      toast(error.message);
-    }
-  });
-
-  document.querySelector("#childRemarkForm")?.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const submitButton = event.currentTarget.querySelector("button[type='submit']");
-    submitButton.disabled = true;
-    try {
-      await api(`/api/students/${event.currentTarget.dataset.studentId}/remark`, {
-        method: "PATCH",
-        body: formData(event.currentTarget)
-      });
-      toast("孩子备注已保存");
-      await loadWorkspaceData();
-      renderApp();
-    } catch (error) {
-      submitButton.disabled = false;
       toast(error.message);
     }
   });
