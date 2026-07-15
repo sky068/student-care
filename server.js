@@ -833,7 +833,7 @@ async function handleApi(req, res, pathname, searchParams) {
   }
 
   if (key === "POST /api/tasks") {
-    requireRole(user, ["parent", "admin"]);
+    requireRole(user, ["parent", "teacher", "admin"]);
     const studentId = String(body.studentId || "");
     const date = normalizeDate(body.date);
     if (!studentId || !String(body.title || "").trim()) fail(400, "学生和任务标题不能为空");
@@ -865,13 +865,16 @@ async function handleApi(req, res, pathname, searchParams) {
 
   const taskById = pathname.match(/^\/api\/tasks\/([^/]+)$/);
   if (taskById && req.method === "PUT") {
-    requireRole(user, ["parent", "admin"]);
+    requireRole(user, ["parent", "teacher", "admin"]);
     const task = db.dailyTasks.find((item) => item.id === taskById[1] && !item.deleted);
     if (!task) fail(404, "任务不存在");
     if (!canAccessStudent(db, user, task.studentId)) fail(403, "没有学生权限");
-    if (user.role === "parent" && (task.createdBy !== user.id || taskStatus(task) === "completed")) fail(403, "只能修改自己创建且待完成的任务");
+    if (user.role !== "admin" && task.createdBy !== user.id) fail(403, "只能修改自己创建的任务");
+    if (user.role !== "admin" && taskStatus(task) === "completed") fail(403, "已完成任务不能修改");
+    const title = String(body.title ?? "").trim();
+    if (!title) fail(400, "任务标题不能为空");
     const before = { ...task };
-    task.title = String(body.title || task.title).trim();
+    task.title = title;
     task.content = String(body.content ?? task.content).trim();
     task.lastModifiedBy = user.id;
     task.updatedAt = now();
@@ -898,11 +901,12 @@ async function handleApi(req, res, pathname, searchParams) {
   }
 
   if (taskById && req.method === "DELETE") {
-    requireRole(user, ["parent", "admin"]);
+    requireRole(user, ["parent", "teacher", "admin"]);
     const task = db.dailyTasks.find((item) => item.id === taskById[1] && !item.deleted);
     if (!task) fail(404, "任务不存在");
     if (!canAccessStudent(db, user, task.studentId)) fail(403, "没有学生权限");
-    if (user.role === "parent" && (task.createdBy !== user.id || taskStatus(task) === "completed")) fail(403, "只能删除自己创建且待完成的任务");
+    if (user.role !== "admin" && task.createdBy !== user.id) fail(403, "只能删除自己创建的任务");
+    if (user.role !== "admin" && taskStatus(task) === "completed") fail(403, "已完成任务不能删除");
     const before = { ...task };
     task.deleted = true;
     task.lastModifiedBy = user.id;

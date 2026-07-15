@@ -74,6 +74,19 @@ function getTaskStatus(task) {
   return task.completed ? "completed" : "pending";
 }
 
+function canManageTask(task) {
+  return ["parent", "teacher"].includes(state.user.role)
+    && task.createdBy === state.user.id
+    && getTaskStatus(task) === "pending";
+}
+
+function taskCreatorText(task) {
+  const creator = task.createdByUser;
+  if (!creator) return "未知用户";
+  const source = creator.role === "teacher" ? "老师补充" : creator.role === "parent" ? "家长布置" : label(creator.role);
+  return `${source} · ${creator.name}`;
+}
+
 function label(value) {
   return labels[value] || value;
 }
@@ -738,7 +751,7 @@ function renderAttendancePanel() {
 }
 
 function renderTaskPanel() {
-  const canCreate = state.user.role === "parent";
+  const canCreate = ["parent", "teacher"].includes(state.user.role);
   const canComplete = state.user.role === "teacher";
   const canRemark = state.user.role === "teacher";
   return html`
@@ -768,7 +781,7 @@ function renderTaskPanel() {
             <dl class="task-audit">
               <div>
                 <dt>创建人</dt>
-                <dd>${escapeHtml(task.createdByUser?.name || "未知用户")}<time>${escapeHtml(formatTaskTimestamp(task.createdAt))}</time></dd>
+                <dd>${escapeHtml(taskCreatorText(task))}<time>${escapeHtml(formatTaskTimestamp(task.createdAt))}</time></dd>
               </div>
               <div>
                 <dt>最后修改</dt>
@@ -795,20 +808,72 @@ function renderTaskPanel() {
                 <p>${escapeHtml(task.teacherRemark)}</p>
               </div>
             ` : ""}
-            <div class="actions" style="margin-top:10px;">
+            <div class="actions task-actions" style="margin-top:10px;">
               ${canComplete ? html`
                 <label class="check-row">
                   <input data-task-completed="${task.id}" type="checkbox" ${getTaskStatus(task) === "completed" ? "checked" : ""} />
                   <span>标记完成</span>
                 </label>
               ` : ""}
-              ${canCreate && getTaskStatus(task) !== "completed" ? `<button data-delete-task="${task.id}" class="danger">删除</button>` : ""}
+              ${canManageTask(task) ? html`
+                <div class="task-owner-actions">
+                  <button type="button" data-edit-task="${task.id}">编辑</button>
+                  <button type="button" data-delete-task="${task.id}" data-task-title="${escapeAttr(task.title)}" class="danger">删除</button>
+                </div>
+              ` : ""}
             </div>
           </div>
         `).join("") : `<div class="notice">当天暂无任务</div>`}
       </div>
     </section>
   `;
+}
+
+function renderEditTaskDialog(task) {
+  const dialog = document.createElement("div");
+  dialog.className = "modal-backdrop";
+  dialog.innerHTML = html`
+    <div class="modal">
+      <div class="item-title">
+        <h3 style="margin:0;">编辑任务</h3>
+        <button class="text" type="button" data-modal-close>关闭</button>
+      </div>
+      <form id="editTaskForm" class="form-grid" style="margin-top:14px;">
+        <div class="field">
+          <label>任务标题</label>
+          <input name="title" value="${escapeAttr(task.title)}" required />
+        </div>
+        <div class="field">
+          <label>任务内容</label>
+          <textarea name="content">${escapeHtml(task.content || "")}</textarea>
+        </div>
+        <button class="primary" type="submit">保存修改</button>
+      </form>
+    </div>
+  `;
+  document.body.appendChild(dialog);
+  dialog.querySelector("[data-modal-close]").addEventListener("click", () => dialog.remove());
+  dialog.addEventListener("click", (event) => {
+    if (event.target === dialog) dialog.remove();
+  });
+  dialog.querySelector("#editTaskForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const submitButton = event.currentTarget.querySelector("button[type='submit']");
+    submitButton.disabled = true;
+    try {
+      await api(`/api/tasks/${task.id}`, { method: "PUT", body: formData(event.currentTarget) });
+      toast("任务已更新");
+      dialog.remove();
+      await loadWorkspaceData();
+      renderApp();
+    } catch (error) {
+      submitButton.disabled = false;
+      toast(error.message);
+    }
+  });
+  const titleInput = dialog.querySelector("input[name='title']");
+  titleInput?.focus();
+  titleInput?.select();
 }
 
 function renderClassPanel() {
@@ -1551,6 +1616,7 @@ function bindAppEvents() {
 
   document.querySelectorAll("[data-delete-task]").forEach((button) => {
     button.addEventListener("click", async () => {
+      if (!window.confirm(`确定删除任务“${button.dataset.taskTitle}”吗？`)) return;
       try {
         await api(`/api/tasks/${button.dataset.deleteTask}`, { method: "DELETE" });
         toast("任务已删除");
@@ -1559,6 +1625,13 @@ function bindAppEvents() {
       } catch (error) {
         toast(error.message);
       }
+    });
+  });
+
+  document.querySelectorAll("[data-edit-task]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const task = state.tasks.find((item) => item.id === button.dataset.editTask);
+      if (task && canManageTask(task)) renderEditTaskDialog(task);
     });
   });
 

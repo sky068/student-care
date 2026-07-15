@@ -658,6 +658,16 @@ textarea:focus {
   box-shadow: 0 2px 8px rgba(31, 38, 32, 0.05);
 }
 
+.task-actions {
+  justify-content: space-between;
+}
+
+.task-owner-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
 .task-audit {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -924,6 +934,13 @@ textarea:focus {
   .task-audit dd {
     justify-content: space-between;
     margin: 0;
+  }
+
+  .task-owner-actions {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    margin-left: 0;
   }
 
   .admin-sidebar {
