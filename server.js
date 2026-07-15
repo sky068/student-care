@@ -80,6 +80,7 @@ async function readDb() {
     if (!db[row.collection]) db[row.collection] = [];
     db[row.collection].push(JSON.parse(row.data));
   }
+  if (ensureStudentCareCodes(db)) persistDb(openDatabase(), db);
   return db;
 }
 
@@ -309,12 +310,66 @@ function listClassesForUser(db, user) {
   return [];
 }
 
-function studentDuplicateKey(student) {
-  return `${student.classId}|${student.name}|${student.studentNo || ""}`;
+function formatStudentCareCode(value) {
+  return String(value).padStart(2, "0");
 }
 
-function studentBaseDisplayName(student) {
-  return student.studentNo ? `${student.name} · ${student.studentNo}` : student.name;
+function normalizedStudentName(value) {
+  return String(value || "").normalize("NFKC").toLocaleLowerCase("zh-CN");
+}
+
+function ensureStudentCareCodes(db) {
+  let changed = false;
+  const groups = new Map();
+  for (const student of db.students) {
+    const key = studentDuplicateKey(student);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(student);
+  }
+  for (const students of groups.values()) {
+    students.sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)) || String(a.id).localeCompare(String(b.id)));
+    if (students.some((student) => student.careCodeVersion !== 2)) {
+      students.forEach((student, index) => {
+        const careCode = formatStudentCareCode(index + 1);
+        if (student.careCode !== careCode || student.careCodeVersion !== 2) changed = true;
+        student.careCode = careCode;
+        student.careCodeVersion = 2;
+      });
+      continue;
+    }
+    const claimed = new Set();
+    let nextNumber = 1;
+    for (const student of students) {
+      const existing = String(student.careCode || "").trim();
+      const normalized = /^\d+$/.test(existing) ? formatStudentCareCode(Number(existing)) : "";
+      if (normalized && !claimed.has(normalized)) {
+        if (student.careCode !== normalized) changed = true;
+        student.careCode = normalized;
+        claimed.add(student.careCode);
+        continue;
+      }
+      while (claimed.has(formatStudentCareCode(nextNumber))) nextNumber += 1;
+      student.careCode = formatStudentCareCode(nextNumber);
+      student.careCodeVersion = 2;
+      claimed.add(student.careCode);
+      nextNumber += 1;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+function nextStudentCareCode(db, classId, studentName) {
+  const duplicateKey = studentDuplicateKey({ classId, name: studentName });
+  const numbers = db.students
+    .filter((student) => studentDuplicateKey(student) === duplicateKey)
+    .map((student) => Number(student.careCode))
+    .filter((value) => Number.isInteger(value) && value > 0);
+  return formatStudentCareCode((numbers.length ? Math.max(...numbers) : 0) + 1);
+}
+
+function studentDuplicateKey(student) {
+  return `${student.classId}|${normalizedStudentName(student.name)}`;
 }
 
 function decorateStudentsForTeacher(students, db) {
@@ -332,10 +387,16 @@ function decorateStudentsForTeacher(students, db) {
     const group = groups.get(studentDuplicateKey(student)) || [student];
     const duplicateCount = group.length;
     const duplicateIndex = group.findIndex((item) => item.id === student.id) + 1;
-    const suffix = duplicateCount > 1 && duplicateIndex > 1 ? ` (${duplicateIndex})` : "";
+    const sameStudentNoCount = student.studentNo
+      ? group.filter((item) => item.studentNo === student.studentNo).length
+      : 0;
+    let identifier = student.studentNo || "";
+    if (duplicateCount > 1 && (!student.studentNo || sameStudentNoCount > 1)) {
+      identifier = student.studentNo ? `${student.studentNo} · ${student.careCode}` : student.careCode;
+    }
     return {
       ...student,
-      displayName: `${studentBaseDisplayName(student)}${suffix}`,
+      displayName: identifier ? `${student.name}（${identifier}）` : student.name,
       duplicateIndex,
       duplicateCount,
       isDuplicate: duplicateCount > 1
@@ -666,6 +727,8 @@ async function handleApi(req, res, pathname, searchParams) {
         gender: String(body.gender || "").trim(),
         classId: classItem.id,
         studentNo,
+        careCode: nextStudentCareCode(db, classItem.id, studentName),
+        careCodeVersion: 2,
         remark: String(body.remark || "").trim(),
         status: "active",
         createdAt: now(),
@@ -707,7 +770,7 @@ async function handleApi(req, res, pathname, searchParams) {
         .map((rel) => db.students.find((student) => student.id === rel.studentId && student.status !== "removed"))
         .filter(Boolean)
         .map((student) => ({ ...student, class: db.classes.find((item) => item.id === student.classId) }));
-      return send(res, 200, { students });
+      return send(res, 200, { students: decorateStudentsForTeacher(students, db) });
     }
     if (user.role === "teacher") {
       const classIds = teacherClassIds(db, user.id);

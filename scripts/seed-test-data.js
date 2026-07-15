@@ -148,8 +148,8 @@ if (!store.teacherClassRelations.some((item) => item.teacherUserId === teacher.i
 }
 
 const studentSpecs = [
-  { id: "stu_test_001", name: "测试学生一", studentNo: "S001" },
-  { id: "stu_test_002", name: "测试学生二", studentNo: "S002" }
+  { id: "stu_test_001", name: "测试学生一", studentNo: "S001", careCode: "01" },
+  { id: "stu_test_002", name: "测试学生二", studentNo: "S002", careCode: "01" }
 ];
 
 for (const spec of studentSpecs) {
@@ -159,6 +159,8 @@ for (const spec of studentSpecs) {
     gender: "",
     classId: classItem.id,
     studentNo: spec.studentNo,
+    careCode: spec.careCode,
+    careCodeVersion: 2,
     remark: "测试数据",
     status: "active",
     createdAt: now(),

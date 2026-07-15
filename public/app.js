@@ -106,7 +106,7 @@ function formatTaskTimestamp(value) {
 }
 
 function studentListName(student) {
-  return student.name || student.displayName || "未命名学生";
+  return student.displayName || student.name || "未命名学生";
 }
 
 function studentListMeta(student) {
