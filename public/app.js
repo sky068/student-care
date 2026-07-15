@@ -220,7 +220,7 @@ function renderAuth(mode = "login") {
   app.innerHTML = html`
     <main class="auth-shell">
       <section class="auth-visual">
-        <h1>学生任务管理系统</h1>
+        <h1>学生托管系统</h1>
         <p>教师按班级管理出勤和任务完成，家长用班级编号绑定孩子并维护每日事项。</p>
       </section>
       <section class="auth-panel">
@@ -669,7 +669,7 @@ function renderSidebar() {
 
   return html`
     <aside class="sidebar">
-      <h1>学生任务管理</h1>
+      <h1>学生托管系统</h1>
       <div class="meta">${labels[state.user.role]} · ${escapeHtml(state.user.account)}</div>
       ${classPicker}
       <div class="field sidebar-students">

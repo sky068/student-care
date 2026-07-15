@@ -979,5 +979,5 @@ const server = http.createServer(async (req, res) => {
 await ensureDb();
 await initConfiguredAdmin();
 server.listen(PORT, () => {
-  console.log(`Student task manager running at http://127.0.0.1:${PORT}`);
+  console.log(`Student care system running at http://127.0.0.1:${PORT}`);
 });

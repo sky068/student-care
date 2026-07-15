@@ -1,6 +1,6 @@
-# 学生任务管理系统
+# 学生托管系统
 
-简单 Web 版学生任务管理系统，后端使用原生 Node.js，数据默认写入 SQLite 数据库 `data/stumng.sqlite`。
+简单 Web 版学生托管系统，后端使用原生 Node.js，数据默认写入 SQLite 数据库 `data/stumng.sqlite`。
 
 ## 启动
 
