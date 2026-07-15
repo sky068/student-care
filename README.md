@@ -37,10 +37,10 @@ chmod +x scripts/deploy.sh
 管理员不通过注册页面创建。部署时通过环境变量初始化：
 
 ```bash
-ADMIN_ACCOUNT=admin ADMIN_PASSWORD=change-me ADMIN_NAME=系统管理员 npm run dev
+ADMIN_ACCOUNT=admin ADMIN_PASSWORD='Admin!ChangeMe2026' ADMIN_NAME=系统管理员 npm run dev
 ```
 
-如果管理员账号不存在，服务启动时会自动创建；如果账号已存在，会更新为管理员角色并刷新密码。
+如果管理员账号不存在，服务启动时会自动创建。所有新密码统一要求至少 8 位，且必须包含大写字母、小写字母和特殊符号。已有旧账号仍可使用原密码登录。
 
 可参考 `.env.example` 配置部署环境变量。
 
@@ -64,8 +64,8 @@ npm run seed:test
 
 脚本会创建或更新：
 
-- 教师账号：`teacher_test / test123456`
-- 家长账号：`parent_test / test123456`
+- 教师账号：`teacher_test / Test!1234`
+- 家长账号：`parent_test / Test!1234`
 - 班级：`测试一班`，班级编号 `TEST01`
 - 两个学生：`测试学生一`、`测试学生二`
 - 每个学生 2 条默认 `待完成` 任务

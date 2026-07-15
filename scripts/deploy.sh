@@ -56,7 +56,7 @@ create_env_if_missing() {
   fi
 
   local password bind trust_proxy
-  password="$(openssl rand -hex 18)"
+  password="Aa!$(openssl rand -hex 16)"
   bind="${APP_BIND:-127.0.0.1}"
   if [[ -n "${TRUST_PROXY:-}" ]]; then
     trust_proxy="$TRUST_PROXY"
@@ -132,8 +132,8 @@ validate_env() {
     echo "错误：.env.deploy 中 ADMIN_ACCOUNT 必须为 1 至 64 个字符。" >&2
     exit 1
   fi
-  if [[ ${#password} -lt 12 || ${#password} -gt 128 || "$password" == "change-this-password" ]]; then
-    echo "错误：ADMIN_PASSWORD 必须为 12 至 128 位强密码，且不能使用示例密码。" >&2
+  if [[ ${#password} -lt 8 || ${#password} -gt 128 || "$password" == "change-this-password" || "$password" == "change_me_before_deploy" || ! "$password" =~ [A-Z] || ! "$password" =~ [a-z] || ! "$password" =~ [^A-Za-z0-9[:space:]] ]]; then
+    echo "错误：ADMIN_PASSWORD 必须为 8 至 128 位，包含大写字母、小写字母和特殊符号，且不能使用示例密码。" >&2
     exit 1
   fi
   if [[ "$uid" == "0" || "$gid" == "0" || ! "$uid" =~ ^[0-9]+$ || ! "$gid" =~ ^[0-9]+$ ]]; then
@@ -222,6 +222,17 @@ compose() {
     args+=(--profile https)
   fi
   "${args[@]}" "$@"
+}
+
+compose_with_https_profile() {
+  docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" --profile https "$@"
+}
+
+reconcile_proxy() {
+  if [[ -z "$(env_value DOMAIN)" ]]; then
+    compose_with_https_profile stop caddy >/dev/null 2>&1 || true
+    compose_with_https_profile rm -f caddy >/dev/null 2>&1 || true
+  fi
 }
 
 wait_for_health() {
@@ -313,6 +324,7 @@ backup_database() {
 }
 
 deploy_application() {
+  reconcile_proxy
   compose up -d --build
   wait_for_health
   wait_for_https
@@ -336,6 +348,7 @@ update_application() {
     echo "错误：新镜像构建失败，旧版本仍在运行。" >&2
     return 1
   fi
+  reconcile_proxy
   if compose up -d --no-build && wait_for_health; then
     if ! wait_for_https; then
       echo "新应用已启动，但 HTTPS 未就绪；未回滚健康的应用版本。" >&2

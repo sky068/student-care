@@ -6,6 +6,8 @@ import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
 
+process.umask(0o077);
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 loadEnvFile(path.join(__dirname, ".env"));
 
@@ -26,8 +28,15 @@ const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const BUSINESS_TIME_ZONE = "Asia/Shanghai";
 const AUTH_RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
 const AUTH_RATE_LIMIT_MAX = 30;
+const MUTATION_RATE_LIMIT_MAX = 120;
+const INVITE_RATE_LIMIT_MAX = 30;
+const MAX_CLASSES_PER_TEACHER = 50;
+const MAX_STUDENTS_PER_PARENT = 50;
+const MAX_TASKS_PER_STUDENT_DATE = 100;
 const PASSWORD_HASH_ITERATIONS = 600000;
+const PASSWORD_REQUIREMENTS = "密码至少 8 位，且必须包含大写字母、小写字母和特殊符号";
 const authAttempts = new Map();
+const actionAttempts = new Map();
 
 function loadEnvFile(filePath) {
   if (!existsSync(filePath)) return;
@@ -60,7 +69,10 @@ const initialDb = {
   operationLogs: []
 };
 
-const jsonHeaders = { "content-type": "application/json; charset=utf-8" };
+const jsonHeaders = {
+  "content-type": "application/json; charset=utf-8",
+  "cache-control": "no-store"
+};
 const securityHeaders = {
   "x-content-type-options": "nosniff",
   "x-frame-options": "DENY",
@@ -253,6 +265,7 @@ async function initConfiguredAdmin() {
     const environmentPasswordChanged = !existing.environmentPasswordFingerprint ||
       !verifyPassword(ADMIN_PASSWORD, existing.environmentPasswordFingerprint);
     if (environmentPasswordChanged) {
+      validateNewPassword(ADMIN_PASSWORD, "管理员密码");
       existing.passwordHash = hashPassword(ADMIN_PASSWORD);
       existing.environmentPasswordFingerprint = hashPassword(ADMIN_PASSWORD);
       db.sessions = db.sessions.filter((item) => item.userId !== existing.id);
@@ -260,6 +273,7 @@ async function initConfiguredAdmin() {
     }
     if (changed) existing.updatedAt = now();
   } else {
+    validateNewPassword(ADMIN_PASSWORD, "管理员密码");
     db.users.push({
       id: id("usr"),
       account: ADMIN_ACCOUNT,
@@ -331,6 +345,16 @@ function verifyPassword(password, stored) {
 
 function passwordHashNeedsUpgrade(stored) {
   return !String(stored || "").startsWith(`pbkdf2$${PASSWORD_HASH_ITERATIONS}$`);
+}
+
+function validateNewPassword(password, fieldName = "密码") {
+  if (password.length > 128) fail(400, `${fieldName}不能超过 128 位`);
+  const missing = [];
+  if (password.length < 8) missing.push("至少 8 位");
+  if (!/[A-Z]/.test(password)) missing.push("大写字母");
+  if (!/[a-z]/.test(password)) missing.push("小写字母");
+  if (!/[^A-Za-z0-9\s]/.test(password)) missing.push("特殊符号");
+  if (missing.length) fail(400, `${fieldName}不符合要求：缺少${missing.join("、")}。${PASSWORD_REQUIREMENTS}`);
 }
 
 function normalizeDate(value) {
@@ -478,6 +502,25 @@ function enforceAuthRateLimit(req) {
   if (recent.length >= AUTH_RATE_LIMIT_MAX) fail(429, "登录或注册尝试过多，请稍后再试");
   recent.push(currentTime);
   authAttempts.set(key, recent);
+}
+
+function clientAddress(req) {
+  const forwardedFor = TRUST_PROXY ? String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() : "";
+  return forwardedFor || req.socket.remoteAddress || "unknown";
+}
+
+function enforceActionRateLimit(req, user, category, maxAttempts) {
+  const key = `${category}:${user.id}:${clientAddress(req)}`;
+  const currentTime = Date.now();
+  const recent = (actionAttempts.get(key) || []).filter((timestamp) => currentTime - timestamp < AUTH_RATE_LIMIT_WINDOW_MS);
+  if (recent.length >= maxAttempts) fail(429, "操作过于频繁，请稍后再试");
+  recent.push(currentTime);
+  actionAttempts.set(key, recent);
+  if (actionAttempts.size > 10000) {
+    for (const [attemptKey, timestamps] of actionAttempts) {
+      if (!timestamps.some((timestamp) => currentTime - timestamp < AUTH_RATE_LIMIT_WINDOW_MS)) actionAttempts.delete(attemptKey);
+    }
+  }
 }
 
 async function readBody(req) {
@@ -852,7 +895,7 @@ async function handleApi(req, res, pathname, searchParams, body = {}) {
     const password = String(body.password || "");
     const name = textInput(body.name, "姓名", 50, true);
     const role = String(body.role || "");
-    if (password.length < 6 || password.length > 128) fail(400, "密码长度必须为 6 到 128 位");
+    validateNewPassword(password);
     if (!["teacher", "parent"].includes(role)) fail(400, "注册身份只能是教师或家长");
     if (db.users.some((item) => item.account === account)) fail(409, "账号已存在");
     const user = {
@@ -953,9 +996,15 @@ async function handleApi(req, res, pathname, searchParams, body = {}) {
   }
 
   const user = requireUser(db, req);
+  if (["POST", "PUT", "PATCH", "DELETE"].includes(req.method || "")) {
+    enforceActionRateLimit(req, user, "mutation", MUTATION_RATE_LIMIT_MAX);
+  }
 
   if (key === "POST /api/classes") {
     requireRole(user, ["teacher", "admin"]);
+    if (user.role === "teacher" && teacherClassIds(db, user.id).length >= MAX_CLASSES_PER_TEACHER) {
+      fail(409, `每个教师最多管理 ${MAX_CLASSES_PER_TEACHER} 个班级`);
+    }
     const className = textInput(body.className, "班级名称", 100, true);
     const classCode = makeClassCode(db);
     let teacherInviteCode = makeClassCode(db);
@@ -988,11 +1037,15 @@ async function handleApi(req, res, pathname, searchParams, body = {}) {
 
   if (key === "POST /api/classes/join-by-code") {
     requireRole(user, ["teacher", "admin"]);
+    enforceActionRateLimit(req, user, "invite", INVITE_RATE_LIMIT_MAX);
     const classCode = textInput(body.classCode, "教师邀请码", 32, true).toUpperCase();
     const classItem = db.classes.find((item) => item.teacherInviteCode === classCode && item.teacherInviteCodeEnabled !== false && item.status === "active");
     if (!classItem) fail(404, "教师邀请码无效或已停用");
     let relation = teacherClassRelation(db, user.id, classItem.id);
     if (!relation) {
+      if (user.role === "teacher" && teacherClassIds(db, user.id).length >= MAX_CLASSES_PER_TEACHER) {
+        fail(409, `每个教师最多管理 ${MAX_CLASSES_PER_TEACHER} 个班级`);
+      }
       relation = {
         id: id("tcr"),
         teacherUserId: user.id,
@@ -1039,8 +1092,7 @@ async function handleApi(req, res, pathname, searchParams, body = {}) {
     const target = db.users.find((item) => item.id === userPassword[1]);
     if (!target) fail(404, "用户不存在");
     const newPassword = String(body.newPassword || "");
-    if (newPassword.length < 6) fail(400, "新密码至少需要 6 位");
-    if (newPassword.length > 128) fail(400, "新密码不能超过 128 位");
+    validateNewPassword(newPassword, "新密码");
     target.passwordHash = hashPassword(newPassword);
     target.updatedAt = now();
     db.sessions = db.sessions.filter((item) => item.userId !== target.id);
@@ -1144,9 +1196,11 @@ async function handleApi(req, res, pathname, searchParams, body = {}) {
 
   if (key === "POST /api/students/bind-by-class-code") {
     requireRole(user, ["parent"]);
+    enforceActionRateLimit(req, user, "invite", INVITE_RATE_LIMIT_MAX);
     const classCode = textInput(body.classCode, "班级编号", 32, true).toUpperCase();
     const studentName = textInput(body.studentName, "学生姓名", 50, true);
     const studentNo = textInput(body.studentNo, "学号", 50);
+    const remark = textInput(body.remark, "备注", 500);
     const relationType = textInput(body.relationType || "监护人", "关系", 30, true);
     const classItem = db.classes.find((item) => item.classCode === classCode && item.classCodeEnabled && item.status === "active");
     if (!classItem) fail(404, "班级编号无效或已停用");
@@ -1158,6 +1212,7 @@ async function handleApi(req, res, pathname, searchParams, body = {}) {
       item.classId === classItem.id &&
       item.name === studentName &&
       (item.studentNo || "") === studentNo &&
+      (item.remark || "") === remark &&
       item.status !== "removed"
     ) || null;
     let createdStudent = false;
@@ -1170,7 +1225,7 @@ async function handleApi(req, res, pathname, searchParams, body = {}) {
         studentNo,
         careCode: nextStudentCareCode(db, classItem.id, studentName),
         careCodeVersion: 2,
-        remark: textInput(body.remark, "备注", 500),
+        remark,
         status: "active",
         createdAt: now(),
         updatedAt: now()
@@ -1181,6 +1236,11 @@ async function handleApi(req, res, pathname, searchParams, body = {}) {
     let relation = db.parentStudentRelations.find((item) => item.parentUserId === user.id && item.studentId === student.id);
     const alreadyBound = Boolean(relation);
     if (!relation) {
+      const activeRelations = db.parentStudentRelations.filter((item) => item.parentUserId === user.id &&
+        db.students.some((studentItem) => studentItem.id === item.studentId && studentItem.status !== "removed"));
+      if (activeRelations.length >= MAX_STUDENTS_PER_PARENT) {
+        fail(409, `每个家长最多绑定 ${MAX_STUDENTS_PER_PARENT} 个孩子`);
+      }
       relation = {
         id: id("psr"),
         parentUserId: user.id,
@@ -1234,6 +1294,21 @@ async function handleApi(req, res, pathname, searchParams, body = {}) {
     logOperation(db, req, user, "update_student_status", "student", student.id, before, student, { studentId: student.id });
     await writeDb(db);
     return send(res, 200, { student: decorateStudentForAdmin(student, db) });
+  }
+
+  const studentRemark = pathname.match(/^\/api\/students\/([^/]+)\/remark$/);
+  if (req.method === "PATCH" && studentRemark) {
+    requireRole(user, ["parent", "teacher", "admin"]);
+    const student = db.students.find((item) => item.id === studentRemark[1] && item.status !== "removed");
+    if (!student) fail(404, "学生不存在");
+    if (!canAccessStudent(db, user, student.id)) fail(403, "没有学生权限");
+    const remark = textInput(body.remark, "备注", 500);
+    const before = { ...student };
+    student.remark = remark;
+    student.updatedAt = now();
+    logOperation(db, req, user, "update_student_remark", "student", student.id, before, student, { studentId: student.id });
+    await writeDb(db);
+    return send(res, 200, { student });
   }
 
   if (key === "POST /api/parent-student-relations") {
@@ -1349,6 +1424,8 @@ async function handleApi(req, res, pathname, searchParams, body = {}) {
     const title = textInput(body.title, "任务标题", 200, true);
     if (!studentId) fail(400, "学生不能为空");
     if (!canAccessStudent(db, user, studentId)) fail(403, "没有学生权限");
+    const taskCount = db.dailyTasks.filter((item) => item.studentId === studentId && item.date === date && !item.deleted).length;
+    if (taskCount >= MAX_TASKS_PER_STUDENT_DATE) fail(409, `每名学生每天最多创建 ${MAX_TASKS_PER_STUDENT_DATE} 条任务`);
     const task = {
       id: id("tsk"),
       studentId,
@@ -1557,7 +1634,8 @@ const server = http.createServer(async (req, res) => {
     await serveStatic(req, res, decodeURIComponent(url.pathname));
   } catch (error) {
     const status = error.status || 500;
-    send(res, status, { error: error.message || "服务器错误" });
+    if (status >= 500) console.error(`[${req.method || "UNKNOWN"}] ${req.url || "/"}`, error);
+    send(res, status, { error: status >= 500 ? "服务器错误" : error.message || "请求失败" });
   }
 });
 

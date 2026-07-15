@@ -13,7 +13,8 @@ const baseUrl = `http://127.0.0.1:${port}`;
 let dataDir;
 let server;
 let adminAccount = "test-admin";
-let adminPassword = "admin123456";
+let adminPassword = "Admin!123456";
+const newUserPassword = "Test!1234";
 
 async function request(pathname, { token, activeRole, ...options } = {}) {
   const headers = { "content-type": "application/json", ...(options.headers || {}) };
@@ -65,10 +66,10 @@ async function stopServer() {
 async function registerAndLogin(account, role) {
   let result = await request("/api/auth/register", {
     method: "POST",
-    body: { account, password: "123456", name: account, role }
+    body: { account, password: newUserPassword, name: account, role }
   });
   assert.equal(result.response.status, 201);
-  result = await request("/api/auth/login", { method: "POST", body: { account, password: "123456" } });
+  result = await request("/api/auth/login", { method: "POST", body: { account, password: newUserPassword } });
   assert.equal(result.response.status, 200);
   return result.body.token;
 }
@@ -150,6 +151,8 @@ test("旧版单角色账号自动兼容为身份列表", async () => {
   assert.equal(homeResponse.headers.get("x-content-type-options"), "nosniff");
   assert.equal(homeResponse.headers.get("x-frame-options"), "DENY");
   assert.match(homeResponse.headers.get("content-security-policy") || "", /frame-ancestors 'none'/);
+  const unauthenticatedApi = await request("/api/auth/me");
+  assert.equal(unauthenticatedApi.response.headers.get("cache-control"), "no-store");
   let result = await request("/api/auth/me", { token: "legacy_session_token" });
   assert.equal(result.response.status, 200, "缺少 activeRole 的旧会话应继续有效");
   assert.equal(result.body.user.role, "parent");
@@ -175,6 +178,20 @@ test("旧版单角色账号自动兼容为身份列表", async () => {
 });
 
 test("关键权限、并发和输入边界", async () => {
+  for (const [password, missing] of [
+    ["short", "至少 8 位"],
+    ["lowercase!123", "大写字母"],
+    ["UPPERCASE!123", "小写字母"],
+    ["NoSpecial123", "特殊符号"]
+  ]) {
+    const weakPasswordResult = await request("/api/auth/register", {
+      method: "POST",
+      body: { account: `weak-${missing}`, password, name: "弱密码", role: "parent" }
+    });
+    assert.equal(weakPasswordResult.response.status, 400);
+    assert.match(weakPasswordResult.body.error, new RegExp(missing));
+  }
+
   const ownerToken = await registerAndLogin("owner", "teacher");
   const parentToken = await registerAndLogin("parent", "parent");
   const outsiderToken = await registerAndLogin("outsider", "parent");
@@ -205,11 +222,26 @@ test("关键权限、并发和输入边界", async () => {
   result = await request("/api/students/bind-by-class-code", {
     token: parentToken,
     method: "POST",
-    body: { classCode: classItem.classCode, studentName: "小明" }
+    body: { classCode: classItem.classCode, studentName: "小明", remark: "花生过敏" }
   });
   assert.equal(result.response.status, 201);
   assert.equal(result.body.class.teacherInviteCode, undefined, "家长响应不能泄露教师邀请码");
+  assert.equal(result.body.student.remark, "花生过敏", "家长填写的备注应保存到孩子信息");
   const studentId = result.body.student.id;
+
+  result = await request(`/api/students/${studentId}/remark`, {
+    token: parentToken,
+    method: "PATCH",
+    body: { remark: "下午由外婆接送" }
+  });
+  assert.equal(result.response.status, 200);
+  assert.equal(result.body.student.remark, "下午由外婆接送");
+  result = await request(`/api/students/${studentId}/remark`, {
+    token: outsiderToken,
+    method: "PATCH",
+    body: { remark: "越权修改" }
+  });
+  assert.equal(result.response.status, 403, "无绑定关系的家长不能修改孩子备注");
 
   const taskResults = await Promise.all(["任务一", "任务二"].map((title) => request("/api/tasks", {
     token: parentToken,
@@ -233,6 +265,10 @@ test("关键权限、并发和输入边界", async () => {
   assert.equal(result.response.status, 400);
   result = await request("/api/auth/login", { method: "POST", body: `{"account":"x","padding":"${"x".repeat(70 * 1024)}"}` });
   assert.equal(result.response.status, 413);
+
+  const internalErrorResponse = await fetch(`${baseUrl}/%E0%A4%A`);
+  assert.equal(internalErrorResponse.status, 500);
+  assert.deepEqual(await internalErrorResponse.json(), { error: "服务器错误" }, "内部异常不能向客户端泄露细节");
 });
 
 test("同一账号可切换教师和家长身份且操作权限隔离", async () => {
@@ -310,7 +346,7 @@ test("同一账号可切换教师和家长身份且操作权限隔离", async ()
   await request("/api/auth/logout", { token, method: "POST", body: {} });
   result = await request("/api/auth/login", {
     method: "POST",
-    body: { account: "dual-role", password: "123456" }
+    body: { account: "dual-role", password: newUserPassword }
   });
   assert.equal(result.body.user.role, "parent", "重新登录应恢复上次使用身份");
 });
@@ -318,7 +354,7 @@ test("同一账号可切换教师和家长身份且操作权限隔离", async ()
 test("管理员身份不能开通或切换普通身份", async () => {
   let result = await request("/api/auth/login", {
     method: "POST",
-    body: { account: "test-admin", password: "admin123456" }
+    body: { account: "test-admin", password: "Admin!123456" }
   });
   assert.equal(result.response.status, 200);
   assert.equal(result.body.user.environmentPasswordFingerprint, undefined, "管理员响应不能暴露环境密码校验哈希");
@@ -341,7 +377,14 @@ test("环境管理员可安全改名且网页改密不会被旧环境密码覆�
   });
   assert.equal(result.response.status, 200);
   const adminId = result.body.user.id;
-  const webPassword = "web-password-123456";
+  const weakReset = await request(`/api/users/${adminId}/password`, {
+    token: result.body.token,
+    method: "PATCH",
+    body: { newPassword: "lowercase!123" }
+  });
+  assert.equal(weakReset.response.status, 400);
+  assert.match(weakReset.body.error, /大写字母/);
+  const webPassword = "Web-password!123456";
   result = await request(`/api/users/${adminId}/password`, {
     token: result.body.token,
     method: "PATCH",
@@ -378,7 +421,7 @@ test("环境管理员可安全改名且网页改密不会被旧环境密码覆�
   assert.equal(result.response.status, 200);
 
   await stopServer();
-  adminPassword = "rotated-environment-password";
+  adminPassword = "Rotated-environment!Password";
   await startServer();
   result = await request("/api/auth/login", {
     method: "POST",
@@ -401,7 +444,7 @@ test("环境管理员账号不能覆盖已有普通账号", async () => {
       PORT: String(port),
       DATA_DIR: dataDir,
       ADMIN_ACCOUNT: "parent",
-      ADMIN_PASSWORD: "another-admin-password",
+      ADMIN_PASSWORD: "Another-admin!Password",
       ADMIN_NAME: "冲突管理员"
     },
     stdio: "ignore"

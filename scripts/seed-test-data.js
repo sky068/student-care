@@ -4,6 +4,8 @@ import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
 
+process.umask(0o077);
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
 const dataDir = path.join(rootDir, "data");
@@ -87,7 +89,7 @@ function upsertUser(store, account, name, role) {
     user = {
       id: id("usr"),
       account,
-      passwordHash: hashPassword("test123456"),
+      passwordHash: hashPassword("Test!1234"),
       name,
       phone: account,
       role,
@@ -220,8 +222,8 @@ for (const spec of studentSpecs) {
 writeStore(db, store);
 
 console.log("测试数据已创建：");
-console.log("- 教师账号：teacher_test / test123456");
-console.log("- 家长账号：parent_test / test123456");
+console.log("- 教师账号：teacher_test / Test!1234");
+console.log("- 家长账号：parent_test / Test!1234");
 console.log("- 班级：测试一班，班级编号 TEST01");
 console.log("- 学生：测试学生一、测试学生二");
 console.log("- 每个学生各 2 条待完成任务");

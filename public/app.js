@@ -69,6 +69,7 @@ const labels = {
   remove_student: "移除学生",
   bind_student_by_class_code: "通过班级编号绑定学生",
   update_student_status: "更新学生状态",
+  update_student_remark: "修改孩子备注",
   create_parent_student_relation: "绑定家长学生关系",
   unbind_parent_student: "解绑家长学生关系",
   create_attendance: "创建出勤",
@@ -102,6 +103,15 @@ function escapeHtml(value) {
 
 function escapeAttr(value) {
   return escapeHtml(value).replaceAll("\n", " ");
+}
+
+function newPasswordError(password) {
+  const missing = [];
+  if (password.length < 8) missing.push("至少 8 位");
+  if (!/[A-Z]/.test(password)) missing.push("大写字母");
+  if (!/[a-z]/.test(password)) missing.push("小写字母");
+  if (!/[^A-Za-z0-9\s]/.test(password)) missing.push("特殊符号");
+  return missing.length ? `密码不符合要求：缺少${missing.join("、")}。密码至少 8 位，且必须包含大写字母、小写字母和特殊符号` : "";
 }
 
 function lockPageScroll() {
@@ -424,7 +434,8 @@ function renderAuth(mode = "login") {
             </div>
             <div class="field">
               <label>密码</label>
-              <input name="password" type="password" minlength="${mode === "login" ? "1" : "6"}" maxlength="128" autocomplete="${mode === "login" ? "current-password" : "new-password"}" required />
+              <input name="password" type="password" minlength="${mode === "login" ? "1" : "8"}" maxlength="128" autocomplete="${mode === "login" ? "current-password" : "new-password"}" aria-describedby="${mode === "login" ? "" : "passwordRequirements"}" required />
+              ${mode === "login" ? "" : `<small id="passwordRequirements" class="muted">至少 8 位，必须包含大写字母、小写字母和特殊符号。</small>`}
             </div>
             <div class="field ${mode === "login" ? "hidden" : ""}">
               <label>姓名</label>
@@ -453,6 +464,11 @@ function renderAuth(mode = "login") {
     const data = formData(event.currentTarget);
     try {
       if (mode === "register") {
+        const passwordError = newPasswordError(data.password);
+        if (passwordError) {
+          toast(passwordError);
+          return;
+        }
         await api("/api/auth/register", { method: "POST", body: data });
         toast("注册成功，请登录");
         renderAuth("login");
@@ -1109,7 +1125,7 @@ function renderAttendancePanel() {
     <section class="panel">
       <h2>出勤</h2>
       ${state.selectedStudentId ? html`
-        <form id="attendanceForm" class="form-grid">
+        <form id="attendanceForm" class="form-grid" data-student-id="${escapeAttr(state.selectedStudentId)}" data-date="${escapeAttr(state.date)}">
           <div class="attendance-row">
             <div class="field">
               <label>上午出勤</label>
@@ -1389,6 +1405,8 @@ function renderCreateClassDialog() {
   });
   dialog.querySelector("#createClassDialogForm").addEventListener("submit", async (event) => {
     event.preventDefault();
+    const submitButton = event.currentTarget.querySelector("button[type='submit']");
+    submitButton.disabled = true;
     try {
       const result = await api("/api/classes", { method: "POST", body: formData(event.currentTarget) });
       state.selectedClassId = result.class.id;
@@ -1398,6 +1416,7 @@ function renderCreateClassDialog() {
       await loadWorkspaceData();
       renderApp();
     } catch (error) {
+      submitButton.disabled = false;
       toast(error.message);
     }
   });
@@ -1505,7 +1524,13 @@ function renderChildPanel() {
             <span>${escapeHtml(student.name)}</span>
             <span class="badge">${escapeHtml(student.class?.className || "班级")}</span>
           </div>
-          <p>备注：${escapeHtml(student.remark || "未填写")}</p>
+          <form id="childRemarkForm" class="form-grid" data-student-id="${escapeAttr(student.id)}" style="margin-top:12px;">
+            <div class="field">
+              <label for="childRemark">备注</label>
+              <textarea id="childRemark" name="remark" maxlength="500" placeholder="选填，例如过敏信息或接送说明">${escapeHtml(student.remark || "")}</textarea>
+            </div>
+            <button type="submit">保存备注</button>
+          </form>
         </div>
       ` : `<div class="notice">暂无绑定孩子</div>`}
     </section>
@@ -1567,12 +1592,15 @@ function renderTeacherOnboarding() {
   bindGlobalActions();
   document.querySelector("#createClassForm").addEventListener("submit", async (event) => {
     event.preventDefault();
+    const submitButton = event.currentTarget.querySelector("button[type='submit']");
+    submitButton.disabled = true;
     try {
       await api("/api/classes", { method: "POST", body: formData(event.currentTarget) });
       toast("班级已创建");
       await loadWorkspaceData();
       renderApp();
     } catch (error) {
+      submitButton.disabled = false;
       toast(error.message);
     }
   });
@@ -1690,11 +1718,12 @@ function renderResetPasswordDialog(userId, userName, userAccount) {
       <form id="resetPasswordForm" class="form-grid" style="margin-top:14px;">
         <div class="field">
           <label>新密码</label>
-          <input name="newPassword" type="password" minlength="6" maxlength="128" autocomplete="new-password" required />
+          <input name="newPassword" type="password" minlength="8" maxlength="128" autocomplete="new-password" aria-describedby="resetPasswordRequirements" required />
+          <small id="resetPasswordRequirements" class="muted">至少 8 位，必须包含大写字母、小写字母和特殊符号。</small>
         </div>
         <div class="field">
           <label>确认新密码</label>
-          <input name="confirmPassword" type="password" minlength="6" maxlength="128" autocomplete="new-password" required />
+          <input name="confirmPassword" type="password" minlength="8" maxlength="128" autocomplete="new-password" required />
         </div>
         <div class="notice">修改后，该用户已登录的设备将全部退出。${isCurrentUser ? "当前管理账号也会退出，请使用新密码重新登录。" : ""}</div>
         <button class="primary" type="submit">确认修改</button>
@@ -1709,6 +1738,11 @@ function renderResetPasswordDialog(userId, userName, userAccount) {
   dialog.querySelector("#resetPasswordForm").addEventListener("submit", async (event) => {
     event.preventDefault();
     const data = formData(event.currentTarget);
+    const passwordError = newPasswordError(data.newPassword);
+    if (passwordError) {
+      toast(passwordError);
+      return;
+    }
     if (data.newPassword !== data.confirmPassword) {
       toast("两次输入的密码不一致");
       return;
@@ -1762,8 +1796,8 @@ function renderParentOnboarding() {
             <input name="studentName" required />
           </div>
           <div class="field">
-            <label>学生编号或备注</label>
-            <input name="studentNo" placeholder="可选，用于区分同名学生" />
+            <label>备注</label>
+            <input name="remark" maxlength="500" placeholder="选填，例如过敏信息或接送说明" />
           </div>
           <button class="primary" type="submit">绑定孩子</button>
           <button type="button" data-action="cancel-bind-child">${state.students.length ? "返回工作台" : "暂不添加"}</button>
@@ -2061,9 +2095,16 @@ function bindAppEvents() {
   });
 
   dateInput?.addEventListener("change", async (event) => {
+    const previousDate = state.date;
     state.date = event.currentTarget.value;
-    await loadWorkspaceData();
-    renderApp();
+    try {
+      await loadWorkspaceData();
+      renderApp();
+    } catch (error) {
+      state.date = previousDate;
+      renderApp();
+      toast(`日期切换失败：${error.message}`);
+    }
   });
 
   document.querySelector("[data-action='open-date-picker']")?.addEventListener("click", () => {
@@ -2077,18 +2118,34 @@ function bindAppEvents() {
   });
 
   document.querySelector("#classSelect")?.addEventListener("change", async (event) => {
+    const previousClassId = state.selectedClassId;
+    const previousStudentId = state.selectedStudentId;
     state.selectedClassId = event.currentTarget.value;
     state.selectedStudentId = "";
-    await loadWorkspaceData();
-    renderApp();
+    try {
+      await loadWorkspaceData();
+      renderApp();
+    } catch (error) {
+      state.selectedClassId = previousClassId;
+      state.selectedStudentId = previousStudentId;
+      renderApp();
+      toast(`班级切换失败：${error.message}`);
+    }
   });
 
   document.querySelectorAll("[data-student-id]").forEach((button) => {
     button.addEventListener("click", async () => {
       closeStudentPicker();
+      const previousStudentId = state.selectedStudentId;
       state.selectedStudentId = button.dataset.studentId;
-      await loadWorkspaceData();
-      renderApp();
+      try {
+        await loadWorkspaceData();
+        renderApp();
+      } catch (error) {
+        state.selectedStudentId = previousStudentId;
+        renderApp();
+        toast(`学生切换失败：${error.message}`);
+      }
     });
   });
 
@@ -2099,14 +2156,32 @@ function bindAppEvents() {
         method: "PUT",
         body: {
           ...formData(event.currentTarget),
-          studentId: state.selectedStudentId,
-          date: state.date
+          studentId: event.currentTarget.dataset.studentId,
+          date: event.currentTarget.dataset.date
         }
       });
       toast("出勤已保存");
       await loadWorkspaceData();
       renderApp();
     } catch (error) {
+      toast(error.message);
+    }
+  });
+
+  document.querySelector("#childRemarkForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const submitButton = event.currentTarget.querySelector("button[type='submit']");
+    submitButton.disabled = true;
+    try {
+      await api(`/api/students/${event.currentTarget.dataset.studentId}/remark`, {
+        method: "PATCH",
+        body: formData(event.currentTarget)
+      });
+      toast("孩子备注已保存");
+      await loadWorkspaceData();
+      renderApp();
+    } catch (error) {
+      submitButton.disabled = false;
       toast(error.message);
     }
   });
