@@ -14,6 +14,17 @@ npm run dev
 http://127.0.0.1:3000
 ```
 
+## 生产部署
+
+推荐使用 Docker Compose 一键部署：
+
+```bash
+chmod +x scripts/deploy.sh
+./scripts/deploy.sh deploy
+```
+
+完整的服务器准备、HTTPS、配置、备份、恢复和升级说明见 [部署说明](doc/部署说明.md)。
+
 ## 管理员配置
 
 管理员不通过注册页面创建。部署时通过环境变量初始化：
