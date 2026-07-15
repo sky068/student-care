@@ -388,12 +388,12 @@ function renderApp() {
     <main class="app-shell">
       ${renderSidebar()}
       <section class="main">
-        <div class="toolbar">
+        <div class="toolbar workspace-toolbar">
           <div>
             <h2 style="margin:0;">${state.user.role === "teacher" ? "班级工作台" : "家长工作台"}</h2>
             <div class="muted">${escapeHtml(state.user.name)} · ${labels[state.user.role]}</div>
           </div>
-          <div class="actions">
+          <div class="actions workspace-toolbar-actions">
             <div class="date-picker-control">
               <input id="dateInput" type="date" value="${state.date}" aria-label="工作日期" />
               <button class="date-picker-button" type="button" data-action="open-date-picker" aria-label="打开日历">
@@ -860,35 +860,33 @@ function renderSidebar() {
       ${classPicker}
       <div class="field sidebar-students">
         <label>${state.user.role === "teacher" ? "选择学生" : "选择孩子"}</label>
-        ${state.students.length ? html`
-          <div class="student-combobox" id="studentPicker">
-            <button class="student-picker-trigger" id="studentPickerTrigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-controls="studentPickerDropdown">
-              <span class="student-picker-copy">
-                <strong>${escapeHtml(studentListName(selectedStudent))}</strong>
-                <span>${escapeHtml(studentListMeta(selectedStudent))}</span>
-              </span>
-              <span class="student-picker-chevron" aria-hidden="true">⌄</span>
-            </button>
-            <div class="student-picker-dropdown hidden" id="studentPickerDropdown">
-              <input id="studentSearchInput" type="search" placeholder="搜索姓名、编号或备注" autocomplete="off" aria-label="搜索学生" />
-              <div class="student-picker-options" role="listbox" aria-label="学生列表">
-                ${state.students.map((student) => html`
-                  <button class="student-picker-option ${student.id === state.selectedStudentId ? "active" : ""}" data-student-id="${student.id}" data-student-search="${escapeAttr(`${studentListName(student)} ${student.studentNo || ""} ${student.remark || ""} ${studentListMeta(student)}`.toLowerCase())}" type="button" role="option" aria-selected="${student.id === state.selectedStudentId ? "true" : "false"}">
-                    <span class="student-name">${escapeHtml(studentListName(student))}</span>
-                    <span class="student-meta">${escapeHtml(studentListMeta(student))}</span>
-                  </button>
-                `).join("")}
-                <div class="notice student-picker-empty hidden">没有匹配的学生</div>
+        <div class="student-picker-row ${state.students.length ? "" : "empty"}">
+          ${state.students.length ? html`
+            <div class="student-combobox" id="studentPicker">
+              <button class="student-picker-trigger" id="studentPickerTrigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-controls="studentPickerDropdown">
+                <span class="student-picker-copy">
+                  <strong>${escapeHtml(studentListName(selectedStudent))}</strong>
+                  <span>${escapeHtml(studentListMeta(selectedStudent))}</span>
+                </span>
+                <span class="student-picker-chevron" aria-hidden="true">⌄</span>
+              </button>
+              <div class="student-picker-dropdown hidden" id="studentPickerDropdown">
+                <input id="studentSearchInput" type="search" placeholder="搜索姓名、编号或备注" autocomplete="off" aria-label="搜索学生" />
+                <div class="student-picker-options" role="listbox" aria-label="学生列表">
+                  ${state.students.map((student) => html`
+                    <button class="student-picker-option ${student.id === state.selectedStudentId ? "active" : ""}" data-student-id="${student.id}" data-student-search="${escapeAttr(`${studentListName(student)} ${student.studentNo || ""} ${student.remark || ""} ${studentListMeta(student)}`.toLowerCase())}" type="button" role="option" aria-selected="${student.id === state.selectedStudentId ? "true" : "false"}">
+                      <span class="student-name">${escapeHtml(studentListName(student))}</span>
+                      <span class="student-meta">${escapeHtml(studentListMeta(student))}</span>
+                    </button>
+                  `).join("")}
+                  <div class="notice student-picker-empty hidden">没有匹配的学生</div>
+                </div>
               </div>
             </div>
-          </div>
-        ` : `<div class="notice">暂无学生</div>`}
-      </div>
-      ${state.user.role === "teacher" ? "" : html`
-        <div class="actions" style="margin-top:16px;">
-          <button class="primary" data-action="show-bind-child">绑定孩子</button>
+          ` : `<div class="notice">暂无学生</div>`}
+          ${state.user.role === "parent" ? `<button class="primary bind-child-quick" type="button" data-action="show-bind-child">绑定孩子</button>` : ""}
         </div>
-      `}
+      </div>
     </aside>
   `;
 }

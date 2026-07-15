@@ -237,8 +237,13 @@ textarea:focus {
 
 .sidebar h1 {
   margin: 0 0 4px;
-  font-size: 22px;
+  font-size: 24px;
   letter-spacing: 0;
+}
+
+.workspace-toolbar h2 {
+  font-size: 22px;
+  line-height: 1.25;
 }
 
 .sidebar .meta {
@@ -333,11 +338,34 @@ textarea:focus {
 .date-picker-control {
   position: relative;
   width: 168px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 40px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.date-picker-control:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-weak);
 }
 
 .date-picker-control input {
+  grid-area: 1 / 1;
   width: 100%;
-  padding-right: 44px;
+  max-width: 100%;
+  min-width: 0;
+  border: 0;
+  border-radius: 6px 0 0 6px;
+  background: transparent;
+  padding: 8px 6px 8px 10px;
+  box-shadow: none;
+}
+
+.date-picker-control input:focus {
+  border: 0;
+  box-shadow: none;
 }
 
 .date-picker-control input::-webkit-calendar-picker-indicator {
@@ -345,22 +373,23 @@ textarea:focus {
 }
 
 .date-picker-control .date-picker-button {
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
+  position: static;
+  grid-area: 1 / 2;
+  align-self: stretch;
   width: 40px;
   min-height: 0;
   display: grid;
   place-items: center;
-  border-color: transparent;
+  border: 0;
+  border-left: 1px solid var(--line);
+  border-radius: 0 6px 6px 0;
   background: transparent;
   color: var(--muted);
   padding: 0;
 }
 
 .date-picker-control .date-picker-button:hover {
-  border-color: transparent;
+  border-left-color: var(--line);
   background: var(--accent-weak);
   color: var(--accent);
   transform: none;
@@ -393,6 +422,7 @@ textarea:focus {
 }
 
 .sidebar-students {
+  min-width: 0;
   min-height: 0;
   display: flex;
   flex: 1;
@@ -447,6 +477,18 @@ textarea:focus {
 
 .student-combobox {
   position: relative;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.student-picker-row {
+  min-width: 0;
+}
+
+.bind-child-quick {
+  width: 100%;
+  margin-top: 16px;
 }
 
 .student-picker-trigger {
@@ -500,6 +542,10 @@ textarea:focus {
   top: calc(100% + 6px);
   right: 0;
   left: 0;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
   padding: 8px;
   border: 1px solid var(--line-strong);
   border-radius: 8px;
@@ -507,16 +553,30 @@ textarea:focus {
   box-shadow: 0 18px 38px rgba(31, 38, 32, 0.16);
 }
 
+#studentSearchInput {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+}
+
 .student-picker-options {
   display: grid;
   gap: 4px;
+  max-width: 100%;
   max-height: min(320px, 48vh);
+  max-height: min(320px, 48svh);
   margin-top: 8px;
   overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
 }
 
 .student-picker-option {
   width: 100%;
+  min-width: 0;
+  max-width: 100%;
   min-height: 58px;
   display: flex;
   flex-direction: column;
@@ -524,6 +584,8 @@ textarea:focus {
   gap: 3px;
   border-color: transparent;
   text-align: left;
+  overflow: hidden;
+  touch-action: pan-y;
 }
 
 .student-picker-option:hover,
@@ -1043,7 +1105,7 @@ textarea:focus {
   }
 
   .sidebar h1 {
-    font-size: 18px;
+    font-size: 22px;
   }
 
   .sidebar .meta {
@@ -1080,6 +1142,62 @@ textarea:focus {
 
   .toolbar > *,
   .actions button {
+    width: 100%;
+  }
+
+  .workspace-toolbar h2 {
+    font-size: 20px;
+  }
+
+  .workspace-toolbar-actions {
+    width: 100%;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: 8px;
+    align-items: stretch;
+  }
+
+  .workspace-toolbar-actions .date-picker-control {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .workspace-toolbar-actions .date-picker-control input {
+    min-width: 0;
+  }
+
+  .workspace-toolbar-actions > button {
+    width: auto;
+    min-width: 58px;
+    padding: 0 10px;
+    font-size: 14px;
+  }
+
+  .student-picker-row {
+    position: relative;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+    align-items: stretch;
+  }
+
+  .student-picker-row.empty {
+    grid-template-columns: 1fr;
+  }
+
+  .student-picker-row .student-combobox {
+    position: static;
+  }
+
+  .student-picker-row .bind-child-quick {
+    width: auto;
+    min-width: 88px;
+    margin-top: 0;
+    padding: 0 10px;
+    white-space: nowrap;
+  }
+
+  .student-picker-row.empty .bind-child-quick {
     width: 100%;
   }
 
