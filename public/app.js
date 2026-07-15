@@ -929,30 +929,30 @@ function renderAttendancePanel() {
       <h2>出勤</h2>
       ${state.selectedStudentId ? html`
         <form id="attendanceForm" class="form-grid">
-          <div class="two-col">
+          <div class="attendance-row">
             <div class="field">
-              <label>上午</label>
+              <label>上午出勤</label>
               <select name="morningStatus">
                 <option value="normal" ${attendance.morningStatus === "normal" ? "selected" : ""}>正常出勤</option>
                 <option value="leave" ${attendance.morningStatus === "leave" ? "selected" : ""}>请假</option>
               </select>
             </div>
             <div class="field">
-              <label>下午</label>
+              <label>上午备注</label>
+              <input name="morningRemark" maxlength="500" placeholder="选填" value="${escapeHtml(attendance.morningRemark || "")}" />
+            </div>
+          </div>
+          <div class="attendance-row">
+            <div class="field">
+              <label>下午出勤</label>
               <select name="afternoonStatus">
                 <option value="normal" ${attendance.afternoonStatus === "normal" ? "selected" : ""}>正常出勤</option>
                 <option value="leave" ${attendance.afternoonStatus === "leave" ? "selected" : ""}>请假</option>
               </select>
             </div>
-          </div>
-          <div class="two-col">
-            <div class="field">
-              <label>上午备注</label>
-              <input name="morningRemark" value="${escapeHtml(attendance.morningRemark || "")}" />
-            </div>
             <div class="field">
               <label>下午备注</label>
-              <input name="afternoonRemark" value="${escapeHtml(attendance.afternoonRemark || "")}" />
+              <input name="afternoonRemark" maxlength="500" placeholder="选填" value="${escapeHtml(attendance.afternoonRemark || "")}" />
             </div>
           </div>
           <button class="primary" type="submit">保存出勤</button>
@@ -1334,7 +1334,7 @@ function renderChildPanel() {
             <span>${escapeHtml(student.name)}</span>
             <span class="badge">${escapeHtml(student.class?.className || "班级")}</span>
           </div>
-          <p>编号：${escapeHtml(student.studentNo || "未填写")}</p>
+          <p>备注：${escapeHtml(student.remark || "未填写")}</p>
         </div>
       ` : `<div class="notice">暂无绑定孩子</div>`}
     </section>

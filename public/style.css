@@ -831,6 +831,13 @@ textarea:focus {
   gap: 12px;
 }
 
+.attendance-row {
+  display: grid;
+  grid-template-columns: minmax(130px, 0.75fr) minmax(0, 1.25fr);
+  gap: 12px;
+  align-items: end;
+}
+
 .three-col {
   display: grid;
   grid-template-columns: 1fr 1fr auto;
@@ -1096,6 +1103,11 @@ textarea:focus {
   .two-col,
   .three-col {
     grid-template-columns: 1fr;
+  }
+
+  .attendance-row {
+    grid-template-columns: minmax(108px, 0.75fr) minmax(0, 1.25fr);
+    gap: 8px;
   }
 
   .task-audit {
