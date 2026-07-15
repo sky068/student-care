@@ -153,6 +153,38 @@ function setToken(token) {
   else localStorage.removeItem("stm_token");
 }
 
+function workspaceSelectionKey() {
+  return state.user?.id ? `stm_workspace_selection:${state.user.id}` : "";
+}
+
+function restoreWorkspaceSelection() {
+  state.selectedClassId = "";
+  state.selectedStudentId = "";
+  const key = workspaceSelectionKey();
+  if (!key) return;
+  try {
+    const saved = JSON.parse(localStorage.getItem(key) || "null");
+    if (!saved || typeof saved !== "object") return;
+    if (state.user.role === "teacher" && typeof saved.classId === "string") {
+      state.selectedClassId = saved.classId;
+    }
+    if (["teacher", "parent"].includes(state.user.role) && typeof saved.studentId === "string") {
+      state.selectedStudentId = saved.studentId;
+    }
+  } catch {}
+}
+
+function rememberWorkspaceSelection() {
+  const key = workspaceSelectionKey();
+  if (!key || !["teacher", "parent"].includes(state.user.role)) return;
+  try {
+    localStorage.setItem(key, JSON.stringify({
+      classId: state.user.role === "teacher" ? state.selectedClassId : "",
+      studentId: state.selectedStudentId
+    }));
+  } catch {}
+}
+
 async function boot() {
   if (!state.token) return renderAuth();
   try {
@@ -160,8 +192,7 @@ async function boot() {
     state.user = me.user;
     state.classes = me.classes || [];
     state.students = me.students || [];
-    state.selectedClassId = state.classes[0]?.id || "";
-    state.selectedStudentId = state.students[0]?.id || "";
+    restoreWorkspaceSelection();
     await loadWorkspaceData();
     renderApp();
   } catch {
@@ -278,6 +309,8 @@ async function loadWorkspaceData() {
       state.selectedStudentId = state.students[0]?.id || "";
     }
   }
+
+  rememberWorkspaceSelection();
 
   if (state.selectedStudentId) {
     const [attendance, tasks, logs] = await Promise.all([
