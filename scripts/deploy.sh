@@ -55,16 +55,25 @@ create_env_if_missing() {
     exit 1
   fi
 
-  local password
+  local password bind trust_proxy
   password="$(openssl rand -hex 18)"
+  bind="${APP_BIND:-127.0.0.1}"
+  if [[ -n "${TRUST_PROXY:-}" ]]; then
+    trust_proxy="$TRUST_PROXY"
+  elif [[ "$bind" == "0.0.0.0" ]]; then
+    trust_proxy="false"
+  else
+    trust_proxy="true"
+  fi
   {
     echo "APP_PORT=${APP_PORT:-3000}"
-    echo "APP_BIND=127.0.0.1"
+    echo "APP_BIND=$bind"
+    echo "ALLOW_INSECURE_HTTP=${ALLOW_INSECURE_HTTP:-false}"
     echo "DOMAIN=${DOMAIN:-}"
     echo "PORT=3000"
     echo "DATA_DIR=/app/data"
     echo "HOST_DATA_DIR=${HOST_DATA_DIR:-./data}"
-    echo "TRUST_PROXY=true"
+    echo "TRUST_PROXY=$trust_proxy"
     echo "BACKUP_RETENTION_DAYS=${BACKUP_RETENTION_DAYS:-30}"
     echo "APP_IMAGE=${APP_IMAGE:-stumng:local}"
     echo "ADMIN_ACCOUNT=${ADMIN_ACCOUNT:-admin}"
@@ -96,6 +105,7 @@ ensure_env_defaults() {
     fi
   done <<'EOF'
 APP_BIND|127.0.0.1
+ALLOW_INSECURE_HTTP|false
 DOMAIN|
 TRUST_PROXY|true
 BACKUP_RETENTION_DAYS|30
@@ -105,7 +115,7 @@ EOF
 
 validate_env() {
   chmod 600 "$ENV_FILE"
-  local account password uid gid retention domain raw_data_dir bind port
+  local account password uid gid retention domain raw_data_dir bind port allow_insecure_http trust_proxy
   account="$(env_value ADMIN_ACCOUNT)"
   password="$(env_value ADMIN_PASSWORD)"
   uid="$(env_value HOST_UID)"
@@ -113,6 +123,8 @@ validate_env() {
   retention="$(env_value BACKUP_RETENTION_DAYS)"
   domain="$(env_value DOMAIN)"
   bind="$(env_value APP_BIND)"
+  allow_insecure_http="$(env_value ALLOW_INSECURE_HTTP)"
+  trust_proxy="$(env_value TRUST_PROXY)"
   port="$(env_value APP_PORT)"
   raw_data_dir="$(env_value HOST_DATA_DIR)"
 
@@ -144,8 +156,34 @@ validate_env() {
     echo "错误：DOMAIN 必须是可公开解析的完整域名。" >&2
     exit 1
   fi
-  if [[ "$bind" != "127.0.0.1" ]]; then
-    echo "错误：APP_BIND 必须保持 127.0.0.1，公网访问应通过自动 HTTPS 或可信反向代理。" >&2
+  if [[ "$bind" != "127.0.0.1" && "$bind" != "0.0.0.0" ]]; then
+    echo "错误：APP_BIND 只允许填写 127.0.0.1 或 0.0.0.0。" >&2
+    exit 1
+  fi
+  if [[ "$allow_insecure_http" != "true" && "$allow_insecure_http" != "false" ]]; then
+    echo "错误：ALLOW_INSECURE_HTTP 只能填写 true 或 false。" >&2
+    exit 1
+  fi
+  if [[ "$trust_proxy" != "true" && "$trust_proxy" != "false" ]]; then
+    echo "错误：TRUST_PROXY 只能填写 true 或 false。" >&2
+    exit 1
+  fi
+  if [[ "$bind" == "0.0.0.0" ]]; then
+    if [[ "$allow_insecure_http" != "true" ]]; then
+      echo "错误：公网 IP 直连必须显式设置 ALLOW_INSECURE_HTTP=true。" >&2
+      exit 1
+    fi
+    if [[ -n "$domain" ]]; then
+      echo "错误：配置 DOMAIN 时 APP_BIND 必须保持 127.0.0.1，由 Caddy 提供 HTTPS。" >&2
+      exit 1
+    fi
+    if [[ "$trust_proxy" != "false" ]]; then
+      echo "错误：公网 IP 直连必须设置 TRUST_PROXY=false，避免客户端伪造来源地址。" >&2
+      exit 1
+    fi
+    echo "警告：当前启用了公网 HTTP，登录密码和业务数据不会经过 HTTPS 加密。仅建议临时使用，并在安全组中限制来源 IP。" >&2
+  elif [[ -n "$domain" && "$trust_proxy" != "true" ]]; then
+    echo "错误：使用内置 Caddy HTTPS 时必须设置 TRUST_PROXY=true。" >&2
     exit 1
   fi
   if [[ -z "$port" || ! "$port" =~ ^[0-9]+$ || "$port" -lt 1 || "$port" -gt 65535 ]]; then
@@ -232,11 +270,15 @@ wait_for_https() {
 }
 
 show_access_url() {
-  local domain port
+  local domain port bind
   domain="$(env_value DOMAIN)"
   port="$(env_value APP_PORT)"
+  bind="$(env_value APP_BIND)"
   if [[ -n "$domain" ]]; then
     echo "访问地址：https://$domain"
+  elif [[ "$bind" == "0.0.0.0" ]]; then
+    echo "访问地址：http://服务器公网IP:${port:-3000}"
+    echo "警告：当前为明文 HTTP，请尽快配置域名并切换到 HTTPS。"
   else
     echo "应用仅监听本机：http://127.0.0.1:${port:-3000}"
     echo "如需公网访问，请在 .env.deploy 配置 DOMAIN 并将域名解析到本服务器。"
@@ -355,4 +397,6 @@ main() {
   esac
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

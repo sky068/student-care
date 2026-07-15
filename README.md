@@ -25,7 +25,7 @@ chmod +x scripts/deploy.sh
 ./scripts/deploy.sh deploy
 ```
 
-默认仅监听服务器本机；正式公网部署请先将域名解析到服务器，并使用 `DOMAIN=care.example.com ./scripts/deploy.sh deploy` 自动启用 HTTPS。
+默认仅监听服务器本机；正式公网部署请先将域名解析到服务器，并使用 `DOMAIN=care.example.com ./scripts/deploy.sh deploy` 自动启用 HTTPS。没有域名且需要临时通过公网 IP 访问时，可使用 `APP_BIND=0.0.0.0 ALLOW_INSECURE_HTTP=true ./scripts/deploy.sh deploy`，但明文 HTTP 不适合长期使用。
 
 完整的服务器准备、HTTPS、配置、备份、恢复和升级说明见 [部署说明](doc/部署说明.md)。
 
