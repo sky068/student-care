@@ -7,6 +7,7 @@ const state = {
   students: [],
   selectedClassId: "",
   selectedStudentId: "",
+  parentOnboardingDismissed: false,
   date: new Date().toISOString().slice(0, 10),
   tasks: [],
   attendance: null,
@@ -203,6 +204,7 @@ async function boot() {
   try {
     const me = await api("/api/auth/me");
     state.user = me.user;
+    state.parentOnboardingDismissed = false;
     state.classes = me.classes || [];
     state.students = me.students || [];
     restoreWorkspaceSelection();
@@ -344,7 +346,7 @@ async function loadWorkspaceData() {
 function renderApp() {
   if (state.user.role === "admin") return renderAdminApp();
   if (state.user.role === "teacher" && !state.classes.length) return renderTeacherOnboarding();
-  if (state.user.role === "parent" && !state.students.length) return renderParentOnboarding();
+  if (state.user.role === "parent" && !state.students.length && !state.parentOnboardingDismissed) return renderParentOnboarding();
 
   app.innerHTML = html`
     <main class="app-shell">
@@ -751,7 +753,7 @@ function renderAttendancePanel() {
 }
 
 function renderTaskPanel() {
-  const canCreate = ["parent", "teacher"].includes(state.user.role);
+  const canCreate = Boolean(state.selectedStudentId) && ["parent", "teacher"].includes(state.user.role);
   const canComplete = state.user.role === "teacher";
   const canRemark = state.user.role === "teacher";
   return html`
@@ -1294,12 +1296,17 @@ function renderParentOnboarding() {
             <input name="studentNo" placeholder="可选，用于区分同名学生" />
           </div>
           <button class="primary" type="submit">绑定孩子</button>
-          <button type="button" data-action="logout">退出</button>
+          <button type="button" data-action="cancel-bind-child">${state.students.length ? "返回工作台" : "暂不添加"}</button>
+          <button class="text" type="button" data-action="logout">退出登录</button>
         </form>
       </section>
     </main>
   `;
   bindGlobalActions();
+  document.querySelector("[data-action='cancel-bind-child']").addEventListener("click", () => {
+    state.parentOnboardingDismissed = true;
+    renderApp();
+  });
   document.querySelector("#bindChildForm").addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
