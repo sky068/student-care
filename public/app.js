@@ -104,10 +104,28 @@ function escapeAttr(value) {
   return escapeHtml(value).replaceAll("\n", " ");
 }
 
+function lockPageScroll() {
+  const scrollY = window.scrollY;
+  const scrollbarWidth = Math.max(0, window.innerWidth - document.documentElement.clientWidth);
+  document.documentElement.classList.add("task-dialog-open");
+  document.body.classList.add("task-dialog-open");
+  document.body.style.setProperty("--task-dialog-scroll-top", `${-scrollY}px`);
+  document.body.style.setProperty("--task-dialog-scrollbar-width", `${scrollbarWidth}px`);
+
+  return () => {
+    document.documentElement.classList.remove("task-dialog-open");
+    document.body.classList.remove("task-dialog-open");
+    document.body.style.removeProperty("--task-dialog-scroll-top");
+    document.body.style.removeProperty("--task-dialog-scrollbar-width");
+    window.scrollTo(0, scrollY);
+  };
+}
+
 function configureTaskDialog(dialog, { titleInput, selectTitle = false, trigger = null } = {}) {
   const closeButton = dialog.querySelector("[data-modal-close]");
   const panel = dialog.querySelector("[role='dialog']");
   const appWasInert = app.hasAttribute("inert");
+  const unlockPageScroll = lockPageScroll();
   let closed = false;
 
   if (!appWasInert) app.setAttribute("inert", "");
@@ -118,6 +136,7 @@ function configureTaskDialog(dialog, { titleInput, selectTitle = false, trigger 
     document.removeEventListener("keydown", handleKeydown);
     dialog.remove();
     if (!appWasInert) app.removeAttribute("inert");
+    unlockPageScroll();
     if (trigger?.isConnected) trigger.focus({ preventScroll: true });
   };
   const handleKeydown = (event) => {

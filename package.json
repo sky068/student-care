@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js",
+    "dev": "HOST=0.0.0.0 node server.js",
     "test": "node --test tests/*.test.js",
     "seed:test": "node scripts/seed-test-data.js"
   },

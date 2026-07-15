@@ -770,6 +770,20 @@ textarea:focus {
   max-height: calc(100vh - 36px);
   max-height: calc(100svh - 36px);
   overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+html.task-dialog-open {
+  overflow: hidden;
+}
+
+body.task-dialog-open {
+  position: fixed;
+  inset: var(--task-dialog-scroll-top) 0 auto;
+  width: 100%;
+  overflow: hidden;
+  padding-right: var(--task-dialog-scrollbar-width);
 }
 
 .task-card {
