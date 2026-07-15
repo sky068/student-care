@@ -1,18 +1,21 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import crypto from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import Database from "better-sqlite3";
 
 const port = 31000 + Math.floor(Math.random() * 1000);
 const baseUrl = `http://127.0.0.1:${port}`;
 let dataDir;
 let server;
 
-async function request(pathname, { token, ...options } = {}) {
+async function request(pathname, { token, activeRole, ...options } = {}) {
   const headers = { "content-type": "application/json", ...(options.headers || {}) };
   if (token) headers.authorization = `Bearer ${token}`;
+  if (activeRole) headers["x-active-role"] = activeRole;
   const response = await fetch(`${baseUrl}${pathname}`, {
     ...options,
     headers,
@@ -44,11 +47,68 @@ async function registerAndLogin(account, role) {
   return result.body.token;
 }
 
+function legacyPasswordHash(password) {
+  const salt = crypto.randomBytes(16).toString("hex");
+  const hash = crypto.pbkdf2Sync(password, salt, 100000, 32, "sha256").toString("hex");
+  return `${salt}:${hash}`;
+}
+
 test.before(async () => {
   dataDir = await mkdtemp(path.join(tmpdir(), "stumng-test-"));
+  const database = new Database(path.join(dataDir, "stumng.sqlite"));
+  database.exec("CREATE TABLE app_records (collection TEXT NOT NULL, id TEXT NOT NULL, data TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY (collection, id))");
+  const legacyUser = {
+    id: "usr_legacy_parent",
+    account: "legacy-parent",
+    passwordHash: legacyPasswordHash("123456"),
+    name: "旧版家长",
+    role: "parent",
+    status: "active",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+  database.prepare("INSERT INTO app_records (collection, id, data, updated_at) VALUES (?, ?, ?, ?)")
+    .run("users", legacyUser.id, JSON.stringify(legacyUser), legacyUser.updatedAt);
+  const legacyTask = {
+    id: "tsk_legacy",
+    studentId: "stu_legacy",
+    date: "2026-07-15",
+    title: "旧版任务",
+    status: "pending",
+    createdBy: legacyUser.id,
+    lastModifiedBy: legacyUser.id,
+    completedBy: null,
+    deleted: false,
+    createdAt: legacyUser.createdAt,
+    updatedAt: legacyUser.updatedAt
+  };
+  const legacyAttendance = {
+    id: "att_legacy",
+    studentId: "stu_legacy",
+    date: "2026-07-15",
+    morningStatus: "normal",
+    afternoonStatus: "normal",
+    createdBy: legacyUser.id,
+    lastModifiedBy: legacyUser.id,
+    createdAt: legacyUser.createdAt,
+    updatedAt: legacyUser.updatedAt
+  };
+  const insertRecord = database.prepare("INSERT INTO app_records (collection, id, data, updated_at) VALUES (?, ?, ?, ?)");
+  insertRecord.run("dailyTasks", legacyTask.id, JSON.stringify(legacyTask), legacyTask.updatedAt);
+  insertRecord.run("attendanceRecords", legacyAttendance.id, JSON.stringify(legacyAttendance), legacyAttendance.updatedAt);
+  const legacySession = { token: "legacy_session_token", userId: legacyUser.id, createdAt: new Date().toISOString() };
+  insertRecord.run("sessions", legacySession.token, JSON.stringify(legacySession), legacySession.createdAt);
+  database.close();
   server = spawn(process.execPath, ["server.js"], {
     cwd: process.cwd(),
-    env: { ...process.env, PORT: String(port), DATA_DIR: dataDir, ADMIN_ACCOUNT: "", ADMIN_PASSWORD: "" },
+    env: {
+      ...process.env,
+      PORT: String(port),
+      DATA_DIR: dataDir,
+      ADMIN_ACCOUNT: "test-admin",
+      ADMIN_PASSWORD: "admin123456",
+      ADMIN_NAME: "测试管理员"
+    },
     stdio: "ignore"
   });
   await waitForServer();
@@ -57,6 +117,29 @@ test.before(async () => {
 test.after(async () => {
   server?.kill();
   await rm(dataDir, { recursive: true, force: true });
+});
+
+test("旧版单角色账号自动兼容为身份列表", async () => {
+  let result = await request("/api/auth/me", { token: "legacy_session_token" });
+  assert.equal(result.response.status, 200, "缺少 activeRole 的旧会话应继续有效");
+  assert.equal(result.body.user.role, "parent");
+  result = await request("/api/auth/login", {
+    method: "POST",
+    body: { account: "legacy-parent", password: "123456" }
+  });
+  assert.equal(result.response.status, 200);
+  assert.deepEqual(result.body.user.roles, ["parent"]);
+  result = await request("/api/auth/me", { token: result.body.token });
+  assert.equal(result.body.user.role, "parent");
+  assert.deepEqual(result.body.user.roles, ["parent"]);
+  const database = new Database(path.join(dataDir, "stumng.sqlite"), { readonly: true });
+  const migratedTask = JSON.parse(database.prepare("SELECT data FROM app_records WHERE collection = ? AND id = ?").get("dailyTasks", "tsk_legacy").data);
+  const migratedAttendance = JSON.parse(database.prepare("SELECT data FROM app_records WHERE collection = ? AND id = ?").get("attendanceRecords", "att_legacy").data);
+  database.close();
+  assert.equal(migratedTask.createdByRole, "parent");
+  assert.equal(migratedTask.lastModifiedByRole, "parent");
+  assert.equal(migratedAttendance.createdByRole, "parent");
+  assert.equal(migratedAttendance.lastModifiedByRole, "parent");
 });
 
 test("关键权限、并发和输入边界", async () => {
@@ -118,4 +201,97 @@ test("关键权限、并发和输入边界", async () => {
   assert.equal(result.response.status, 400);
   result = await request("/api/auth/login", { method: "POST", body: `{"account":"x","padding":"${"x".repeat(70 * 1024)}"}` });
   assert.equal(result.response.status, 413);
+});
+
+test("同一账号可切换教师和家长身份且操作权限隔离", async () => {
+  const token = await registerAndLogin("dual-role", "parent");
+  let result = await request("/api/auth/switch-role", { token, method: "POST", body: { role: "teacher" } });
+  assert.equal(result.response.status, 403, "未开通的身份不能直接切换");
+  result = await request("/api/auth/roles", { token, method: "POST", body: { role: "teacher" } });
+  assert.equal(result.response.status, 200);
+  assert.deepEqual(result.body.user.roles, ["parent", "teacher"]);
+  result = await request("/api/auth/roles", { token, method: "POST", body: { role: "teacher" } });
+  assert.equal(result.body.alreadyExists, true, "重复开通身份应为无副作用操作");
+
+  result = await request("/api/auth/switch-role", { token, method: "POST", body: { role: "teacher" } });
+  assert.equal(result.response.status, 200);
+  assert.equal(result.body.user.role, "teacher");
+  result = await request("/api/auth/switch-role", { token, method: "POST", body: { role: "teacher" } });
+  assert.equal(result.body.alreadyActive, true, "切换到当前身份应为无副作用操作");
+  result = await request("/api/auth/me", { token, activeRole: "parent" });
+  assert.equal(result.response.status, 409, "切换后到达的旧身份请求必须被拒绝");
+
+  result = await request("/api/classes", { token, method: "POST", body: { className: "双身份班级" } });
+  assert.equal(result.response.status, 201);
+  const classItem = result.body.class;
+
+  result = await request("/api/auth/switch-role", { token, method: "POST", body: { role: "parent" } });
+  assert.equal(result.body.user.role, "parent");
+  result = await request("/api/students/bind-by-class-code", {
+    token,
+    method: "POST",
+    body: { classCode: classItem.classCode, studentName: "双身份孩子" }
+  });
+  assert.equal(result.response.status, 201);
+  const studentId = result.body.student.id;
+
+  result = await request("/api/tasks", {
+    token,
+    method: "POST",
+    body: { studentId, date: "2026-07-15", title: "家长身份任务" }
+  });
+  assert.equal(result.response.status, 201);
+  const parentTask = result.body.task;
+  assert.equal(parentTask.createdByRole, "parent");
+
+  await request("/api/auth/switch-role", { token, method: "POST", body: { role: "teacher" } });
+  result = await request(`/api/tasks/${parentTask.id}`, {
+    token,
+    method: "PUT",
+    body: { title: "越权修改", content: "" }
+  });
+  assert.equal(result.response.status, 403, "教师身份不能修改同账号以家长身份创建的任务");
+
+  result = await request("/api/tasks", {
+    token,
+    method: "POST",
+    body: { studentId, date: "2026-07-15", title: "教师身份任务" }
+  });
+  assert.equal(result.response.status, 201);
+  const teacherTask = result.body.task;
+  assert.equal(teacherTask.createdByRole, "teacher");
+
+  await request("/api/auth/switch-role", { token, method: "POST", body: { role: "parent" } });
+  result = await request(`/api/tasks/${teacherTask.id}`, {
+    token,
+    method: "DELETE",
+    body: {}
+  });
+  assert.equal(result.response.status, 403, "家长身份不能删除同账号以教师身份创建的任务");
+
+  result = await request("/api/auth/me", { token });
+  assert.equal(result.body.user.role, "parent");
+  assert.deepEqual(result.body.user.roles, ["parent", "teacher"]);
+  assert.equal(result.body.classes.length, 0, "家长身份不返回教师班级列表");
+  assert.equal(result.body.students.length, 1);
+
+  await request("/api/auth/logout", { token, method: "POST", body: {} });
+  result = await request("/api/auth/login", {
+    method: "POST",
+    body: { account: "dual-role", password: "123456" }
+  });
+  assert.equal(result.body.user.role, "parent", "重新登录应恢复上次使用身份");
+});
+
+test("管理员身份不能开通或切换普通身份", async () => {
+  let result = await request("/api/auth/login", {
+    method: "POST",
+    body: { account: "test-admin", password: "admin123456" }
+  });
+  assert.equal(result.response.status, 200);
+  const token = result.body.token;
+  result = await request("/api/auth/roles", { token, method: "POST", body: { role: "parent" } });
+  assert.equal(result.response.status, 403);
+  result = await request("/api/auth/switch-role", { token, method: "POST", body: { role: "parent" } });
+  assert.equal(result.response.status, 403);
 });

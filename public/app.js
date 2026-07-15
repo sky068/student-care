@@ -12,6 +12,7 @@ function formatBusinessDate(date = new Date()) {
 const archiveStart = new Date();
 archiveStart.setDate(archiveStart.getDate() - 180);
 let workspaceLoadGeneration = 0;
+let authGeneration = 0;
 const taskRemarkSaveQueues = new Map();
 
 const state = {
@@ -22,6 +23,7 @@ const state = {
   selectedClassId: "",
   selectedStudentId: "",
   parentOnboardingDismissed: false,
+  roleOnboardingSuppressed: false,
   date: formatBusinessDate(),
   tasks: [],
   attendance: null,
@@ -62,6 +64,8 @@ const labels = {
   disable_class_code: "停用班级编号",
   refresh_teacher_invite_code: "刷新教师邀请码",
   disable_teacher_invite_code: "停用教师邀请码",
+  add_user_role: "开通账号身份",
+  switch_user_role: "切换账号身份",
   remove_student: "移除学生",
   bind_student_by_class_code: "通过班级编号绑定学生",
   update_student_status: "更新学生状态",
@@ -108,6 +112,7 @@ function getTaskStatus(task) {
 function canManageTask(task) {
   return ["parent", "teacher"].includes(state.user.role)
     && task.createdBy === state.user.id
+    && task.createdByRole === state.user.role
     && getTaskStatus(task) === "pending";
 }
 
@@ -120,6 +125,11 @@ function taskCreatorText(task) {
 
 function label(value) {
   return labels[value] || value;
+}
+
+function userRoleText(user) {
+  const roles = Array.isArray(user.roles) && user.roles.length ? user.roles : [user.role];
+  return roles.map(label).join(" / ");
 }
 
 function formatTaskTimestamp(value) {
@@ -177,12 +187,14 @@ function toast(message) {
 }
 
 async function api(path, options = {}) {
-  const headers = { "content-type": "application/json", ...(options.headers || {}) };
+  const { skipActiveRole = false, ...requestOptions } = options;
+  const headers = { "content-type": "application/json", ...(requestOptions.headers || {}) };
   if (state.token) headers.authorization = `Bearer ${state.token}`;
+  if (!skipActiveRole && state.user?.role) headers["x-active-role"] = state.user.role;
   const response = await fetch(path, {
-    ...options,
+    ...requestOptions,
     headers,
-    body: options.body ? JSON.stringify(options.body) : undefined
+    body: requestOptions.body ? JSON.stringify(requestOptions.body) : undefined
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.error || "请求失败");
@@ -194,13 +206,82 @@ function formData(form) {
 }
 
 function setToken(token) {
-  state.token = token || "";
+  const nextToken = token || "";
+  if (state.token !== nextToken) authGeneration += 1;
+  state.token = nextToken;
   if (token) localStorage.setItem("stm_token", token);
   else localStorage.removeItem("stm_token");
 }
 
 function workspaceSelectionKey() {
-  return state.user?.id ? `stm_workspace_selection:${state.user.id}` : "";
+  return state.user?.id && state.user?.role ? `stm_workspace_selection:${state.user.id}:${state.user.role}` : "";
+}
+
+function resetWorkspaceState() {
+  workspaceLoadGeneration += 1;
+  state.classes = [];
+  state.students = [];
+  state.selectedClassId = "";
+  state.selectedStudentId = "";
+  state.tasks = [];
+  state.attendance = null;
+  state.logs = [];
+  state.parentOnboardingDismissed = false;
+  state.roleOnboardingSuppressed = false;
+}
+
+async function switchRole(role) {
+  if (!role || role === state.user?.role) return;
+  const expectedToken = state.token;
+  const expectedGeneration = authGeneration;
+  let result;
+  try {
+    result = await api("/api/auth/switch-role", { method: "POST", body: { role } });
+  } catch (error) {
+    if (state.token !== expectedToken || authGeneration !== expectedGeneration) throw error;
+    try {
+      const current = await api("/api/auth/me", { skipActiveRole: true });
+      if (state.token !== expectedToken || authGeneration !== expectedGeneration) throw error;
+      state.user = current.user;
+      if (current.user.role !== role) {
+        throw error;
+      }
+      result = current;
+    } catch {
+      throw error;
+    }
+  }
+  if (state.token !== expectedToken || authGeneration !== expectedGeneration) return;
+  resetWorkspaceState();
+  state.roleOnboardingSuppressed = true;
+  state.user = result.user;
+  restoreWorkspaceSelection();
+  let loadError = null;
+  try {
+    await loadWorkspaceData();
+  } catch (error) {
+    loadError = error;
+  }
+  renderApp();
+  toast(`已切换为${label(role)}身份`);
+  if (loadError) window.setTimeout(() => toast(`身份已切换，数据加载失败：${loadError.message}`), 300);
+}
+
+function renderRoleSwitcher() {
+  if (!state.user || state.user.role === "admin") return "";
+  const roles = Array.isArray(state.user.roles) && state.user.roles.length ? state.user.roles : [state.user.role];
+  const otherRole = ["teacher", "parent"].find((role) => !roles.includes(role));
+  return html`
+    <div class="identity-switcher">
+      <div class="field">
+        <label>当前身份</label>
+        <select data-role-switch aria-label="切换当前身份">
+          ${roles.map((role) => `<option value="${role}" ${role === state.user.role ? "selected" : ""}>${label(role)}</option>`).join("")}
+        </select>
+      </div>
+      ${otherRole ? `<button type="button" data-add-role="${otherRole}">开通${label(otherRole)}身份</button>` : ""}
+    </div>
+  `;
 }
 
 function restoreWorkspaceSelection() {
@@ -237,6 +318,7 @@ async function boot() {
     const me = await api("/api/auth/me");
     state.user = me.user;
     state.parentOnboardingDismissed = false;
+    state.roleOnboardingSuppressed = false;
     state.classes = me.classes || [];
     state.students = me.students || [];
     restoreWorkspaceSelection();
@@ -407,8 +489,8 @@ async function loadMoreAdminRecentLogs() {
 
 function renderApp() {
   if (state.user.role === "admin") return renderAdminApp();
-  if (state.user.role === "teacher" && !state.classes.length) return renderTeacherOnboarding();
-  if (state.user.role === "parent" && !state.students.length && !state.parentOnboardingDismissed) return renderParentOnboarding();
+  if (state.user.role === "teacher" && !state.classes.length && !state.roleOnboardingSuppressed) return renderTeacherOnboarding();
+  if (state.user.role === "parent" && !state.students.length && !state.parentOnboardingDismissed && !state.roleOnboardingSuppressed) return renderParentOnboarding();
 
   app.innerHTML = html`
     <main class="app-shell">
@@ -434,9 +516,15 @@ function renderApp() {
         </div>
         <div class="workspace">
           <div>
-            ${state.user.role === "parent" ? renderChildPanel() : ""}
-            ${renderAttendancePanel()}
-            ${renderTaskPanel()}
+            ${state.user.role === "teacher" && !state.classes.length
+              ? renderTeacherEmptyWorkspace()
+              : state.user.role === "parent" && !state.students.length
+                ? renderParentEmptyWorkspace()
+                : html`
+                  ${state.user.role === "parent" ? renderChildPanel() : ""}
+                  ${renderAttendancePanel()}
+                  ${renderTaskPanel()}
+                `}
           </div>
           <aside class="workspace-aside">
             ${renderLogPanel()}
@@ -446,6 +534,28 @@ function renderApp() {
     </main>
   `;
   bindAppEvents();
+}
+
+function renderTeacherEmptyWorkspace() {
+  return html`
+    <section class="panel empty-workspace-panel">
+      <h2>教师工作台</h2>
+      <p class="muted">当前教师身份还没有管理班级。你可以稍后创建班级，或使用教师邀请码加入已有班级。</p>
+      <div class="actions">
+        <button class="primary" type="button" data-action="show-create-class">创建班级</button>
+        <button type="button" data-action="show-join-class">加入班级</button>
+      </div>
+    </section>
+  `;
+}
+
+function renderParentEmptyWorkspace() {
+  return html`
+    <section class="panel empty-workspace-panel">
+      <h2>家长工作台</h2>
+      <p class="muted">当前家长身份还没有绑定孩子。需要添加时，请使用上方的“绑定孩子”按钮。</p>
+    </section>
+  `;
 }
 
 function renderAdminApp() {
@@ -494,7 +604,7 @@ function renderAdminPanel() {
 function renderAdminUsers() {
   const users = state.adminUserRoleFilter === "all"
     ? state.adminData.users
-    : state.adminData.users.filter((user) => user.role === state.adminUserRoleFilter);
+    : state.adminData.users.filter((user) => (user.roles || [user.role]).includes(state.adminUserRoleFilter));
   return html`
     <section class="panel admin-users-panel">
       <div class="toolbar admin-users-toolbar" style="margin-bottom:14px;">
@@ -520,7 +630,7 @@ function renderAdminUsers() {
               <span class="badge ${user.status === "active" ? "done" : "warn"}">${user.status === "active" ? "启用" : "停用"}</span>
             </div>
             <div class="admin-user-meta">
-              <span>${labels[user.role] || user.role}</span>
+              <span>${escapeHtml(userRoleText(user))}</span>
               <span>${new Date(user.createdAt).toLocaleString()}</span>
             </div>
             <div class="admin-user-actions">
@@ -540,7 +650,7 @@ function renderAdminUsers() {
               <tr>
                 <td>${escapeHtml(user.name)}</td>
                 <td>${escapeHtml(user.account)}</td>
-                <td>${labels[user.role] || user.role}</td>
+                <td>${escapeHtml(userRoleText(user))}</td>
                 <td><span class="badge ${user.status === "active" ? "done" : "warn"}">${user.status === "active" ? "启用" : "停用"}</span></td>
                 <td>${new Date(user.createdAt).toLocaleString()}</td>
                 <td>
@@ -883,6 +993,7 @@ function renderSidebar() {
     <aside class="sidebar">
       <h1>学生托管系统</h1>
       <div class="meta">${labels[state.user.role]} · ${escapeHtml(state.user.account)}</div>
+      ${renderRoleSwitcher()}
       ${classPicker}
       <div class="field sidebar-students">
         <label>${state.user.role === "teacher" ? "选择学生" : "选择孩子"}</label>
@@ -1373,6 +1484,7 @@ function renderTeacherOnboarding() {
             <strong>班级入口</strong>
             <span>${escapeHtml(state.user.name)} · 教师</span>
           </div>
+          ${renderRoleSwitcher()}
           <form id="createClassForm" class="form-grid">
             <div class="field">
               <label>创建班级</label>
@@ -1580,6 +1692,7 @@ function renderParentOnboarding() {
             <strong>加入班级</strong>
             <span>${escapeHtml(state.user.name)} · 家长</span>
           </div>
+          ${renderRoleSwitcher()}
           <div class="field">
             <label>班级编号</label>
             <input name="classCode" placeholder="例如：A8K392" required />
@@ -1622,12 +1735,59 @@ function renderParentOnboarding() {
 }
 
 function bindGlobalActions() {
+  document.querySelectorAll("[data-role-switch]").forEach((select) => {
+    select.addEventListener("change", async () => {
+      const previousRole = state.user.role;
+      const expectedGeneration = authGeneration;
+      select.disabled = true;
+      try {
+        await switchRole(select.value);
+      } catch (error) {
+        if (select.isConnected && authGeneration === expectedGeneration) {
+          select.value = previousRole;
+          select.disabled = false;
+          toast(error.message);
+        }
+      }
+    });
+  });
+
+  document.querySelectorAll("[data-add-role]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const role = button.dataset.addRole;
+      if (!window.confirm(`确定开通${label(role)}身份吗？两个身份的数据入口和操作权限相互独立。`)) return;
+      button.disabled = true;
+      const expectedToken = state.token;
+      const expectedGeneration = authGeneration;
+      try {
+        const result = await api("/api/auth/roles", { method: "POST", body: { role } });
+        if (state.token !== expectedToken || authGeneration !== expectedGeneration) return;
+        state.user = result.user;
+        await switchRole(role);
+      } catch (error) {
+        if (state.token === expectedToken && authGeneration === expectedGeneration) {
+          try {
+            const current = await api("/api/auth/me", { skipActiveRole: true });
+            if (state.token === expectedToken && authGeneration === expectedGeneration) {
+              state.user = current.user;
+              renderApp();
+            }
+          } catch {}
+        }
+        if (button.isConnected) button.disabled = false;
+        if (state.token === expectedToken && authGeneration === expectedGeneration) toast(error.message);
+      }
+    });
+  });
+
   document.querySelectorAll("[data-action='logout']").forEach((button) => {
     button.addEventListener("click", async () => {
+      authGeneration += 1;
       try {
         await api("/api/auth/logout", { method: "POST" });
       } catch {}
       setToken("");
+      resetWorkspaceState();
       state.user = null;
       renderAuth();
     });
@@ -1991,7 +2151,9 @@ function bindAppEvents() {
   });
 
   document.querySelector("[data-action='show-class-settings']")?.addEventListener("click", () => renderClassSettingsDialog());
-  document.querySelector("[data-action='show-bind-child']")?.addEventListener("click", () => renderParentOnboarding());
+  document.querySelectorAll("[data-action='show-create-class']").forEach((button) => button.addEventListener("click", renderCreateClassDialog));
+  document.querySelectorAll("[data-action='show-join-class']").forEach((button) => button.addEventListener("click", renderJoinClassDialog));
+  document.querySelectorAll("[data-action='show-bind-child']").forEach((button) => button.addEventListener("click", () => renderParentOnboarding()));
 }
 
 boot();

@@ -153,8 +153,10 @@ async function readDb() {
   }
   const studentCodesChanged = ensureStudentCareCodes(db);
   const classCodesChanged = ensureClassInviteCodes(db);
+  const userRolesChanged = ensureUserRoles(db);
+  const actorRolesChanged = ensureActorRoles(db);
   const sessionsChanged = pruneExpiredSessions(db);
-  if (studentCodesChanged || classCodesChanged || sessionsChanged) persistDb(openDatabase(), db);
+  if (studentCodesChanged || classCodesChanged || userRolesChanged || actorRolesChanged || sessionsChanged) persistDb(openDatabase(), db);
   return db;
 }
 
@@ -212,6 +214,8 @@ async function initConfiguredAdmin() {
     existing.name = ADMIN_NAME;
     existing.phone = ADMIN_ACCOUNT;
     existing.role = "admin";
+    existing.roles = ["admin"];
+    existing.lastActiveRole = "admin";
     existing.passwordHash = hashPassword(ADMIN_PASSWORD);
     existing.status = "active";
     existing.updatedAt = now();
@@ -224,6 +228,8 @@ async function initConfiguredAdmin() {
       name: ADMIN_NAME,
       phone: ADMIN_ACCOUNT,
       role: "admin",
+      roles: ["admin"],
+      lastActiveRole: "admin",
       wechatOpenid: "",
       wechatUnionid: "",
       status: "active",
@@ -291,15 +297,68 @@ function pruneExpiredSessions(db) {
   return true;
 }
 
+function userRoles(user) {
+  if (user?.role === "admin") return ["admin"];
+  const configuredRoles = Array.isArray(user?.roles) ? user.roles : [];
+  const roles = configuredRoles.filter((role) => ["teacher", "parent"].includes(role));
+  if (!roles.length && ["teacher", "parent"].includes(user?.role)) roles.push(user.role);
+  return [...new Set(roles)];
+}
+
+function hasRole(user, role) {
+  return userRoles(user).includes(role);
+}
+
+function ensureUserRoles(db) {
+  let changed = false;
+  for (const user of db.users) {
+    const roles = userRoles(user);
+    if (JSON.stringify(user.roles || []) !== JSON.stringify(roles)) {
+      user.roles = roles;
+      changed = true;
+    }
+    if (!roles.includes(user.lastActiveRole)) {
+      user.lastActiveRole = roles[0] || user.role;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+function ensureActorRoles(db) {
+  let changed = false;
+  const roleForUser = (userId) => {
+    const role = db.users.find((item) => item.id === userId)?.role;
+    return ["teacher", "parent", "admin"].includes(role) ? role : "unknown";
+  };
+  const fillRole = (record, field, userId) => {
+    if (record[field] || !userId) return;
+    record[field] = roleForUser(userId);
+    changed = true;
+  };
+
+  for (const attendance of db.attendanceRecords) {
+    fillRole(attendance, "createdByRole", attendance.createdBy);
+    fillRole(attendance, "lastModifiedByRole", attendance.lastModifiedBy || attendance.createdBy);
+  }
+  for (const task of db.dailyTasks) {
+    fillRole(task, "createdByRole", task.createdBy);
+    fillRole(task, "lastModifiedByRole", task.lastModifiedBy || task.createdBy);
+    fillRole(task, "completedByRole", task.completedBy);
+    fillRole(task, "teacherRemarkByRole", task.teacherRemarkBy);
+  }
+  return changed;
+}
+
 function cleanUser(user) {
   if (!user) return null;
   const { passwordHash, ...rest } = user;
   return rest;
 }
 
-function publicUser(user) {
+function publicUser(user, roleOverride = "") {
   if (!user) return null;
-  return { id: user.id, name: user.name, role: user.role, status: user.status };
+  return { id: user.id, name: user.name, role: roleOverride || user.role, roles: userRoles(user), status: user.status };
 }
 
 function parentClass(classItem) {
@@ -387,7 +446,14 @@ function currentUser(db, req) {
   const expiresAt = Date.parse(session.expiresAt || session.createdAt);
   const validUntil = session.expiresAt ? expiresAt : expiresAt + SESSION_TTL_MS;
   if (!Number.isFinite(validUntil) || validUntil <= Date.now()) return null;
-  return db.users.find((item) => item.id === session.userId && item.status === "active") || null;
+  const user = db.users.find((item) => item.id === session.userId && item.status === "active");
+  if (!user) return null;
+  const roles = userRoles(user);
+  const requestedRole = String(req.headers["x-active-role"] || "");
+  const activeRole = roles.includes(session.activeRole) ? session.activeRole : roles[0];
+  if (requestedRole && requestedRole !== activeRole) fail(409, "当前身份已切换，请重试");
+  if (!activeRole) return null;
+  return { ...user, role: activeRole, roles };
 }
 
 function requireUser(db, req) {
@@ -452,7 +518,7 @@ function decorateClassForUser(db, classItem, user) {
       id: relation.id,
       role: relation.role || "owner",
       teacherUserId: relation.teacherUserId,
-      teacher: publicUser(db.users.find((item) => item.id === relation.teacherUserId)),
+      teacher: publicUser(db.users.find((item) => item.id === relation.teacherUserId), "teacher"),
       createdAt: relation.createdAt
     }))
   };
@@ -593,14 +659,23 @@ function taskStatus(task) {
   return task.completed ? "completed" : "pending";
 }
 
-function taskActor(db, userId, fallbackLog = null) {
+function taskActor(db, userId, fallbackLog = null, roleOverride = "") {
   const user = db.users.find((item) => item.id === userId);
   if (!user && !fallbackLog) return null;
   return {
     id: user?.id || userId || fallbackLog.operatorUserId,
     name: user?.name || fallbackLog.operatorName || "未知用户",
-    role: user?.role || fallbackLog.operatorRole || ""
+    role: roleOverride || fallbackLog?.operatorRole || user?.role || ""
   };
+}
+
+function taskCreatedRole(db, task, createLog = null) {
+  return task.createdByRole || createLog?.operatorRole || db.users.find((item) => item.id === task.createdBy)?.role || "";
+}
+
+function canManageOwnTask(db, user, task) {
+  if (user.role === "admin") return true;
+  return task.createdBy === user.id && taskCreatedRole(db, task) === user.role;
 }
 
 function decorateTask(db, task) {
@@ -612,14 +687,20 @@ function decorateTask(db, task) {
   const completionLog = taskLogs.find((item) => item.action === "complete_task") || null;
   const latestLog = taskLogs[0] || null;
   const lastModifiedBy = task.lastModifiedBy || latestLog?.operatorUserId || task.createdBy;
+  const createdByRole = taskCreatedRole(db, task, createLog);
+  const lastModifiedByRole = task.lastModifiedByRole || latestLog?.operatorRole || createdByRole;
+  const completedByRole = task.completedByRole || completionLog?.operatorRole || "";
   return {
     ...task,
     status,
     completed: status === "completed",
+    createdByRole,
     lastModifiedBy,
-    createdByUser: taskActor(db, task.createdBy, createLog),
-    lastModifiedByUser: taskActor(db, lastModifiedBy, latestLog),
-    completedByUser: task.completedBy ? taskActor(db, task.completedBy, completionLog) : null
+    lastModifiedByRole,
+    completedByRole,
+    createdByUser: taskActor(db, task.createdBy, createLog, createdByRole),
+    lastModifiedByUser: taskActor(db, lastModifiedBy, latestLog, lastModifiedByRole),
+    completedByUser: task.completedBy ? taskActor(db, task.completedBy, completionLog, completedByRole) : null
   };
 }
 
@@ -715,6 +796,8 @@ async function handleApi(req, res, pathname, searchParams, body = {}) {
       name,
       phone: account,
       role,
+      roles: [role],
+      lastActiveRole: role,
       wechatOpenid: "",
       wechatUnionid: "",
       status: "active",
@@ -733,11 +816,17 @@ async function handleApi(req, res, pathname, searchParams, body = {}) {
     if (password.length > 128) fail(400, "密码不能超过 128 位");
     const user = db.users.find((item) => item.account === account && item.status === "active");
     if (!user || !verifyPassword(password, user.passwordHash)) fail(401, "账号或密码错误");
+    const roles = userRoles(user);
+    const requestedRole = String(body.role || "");
+    const activeRole = roles.includes(requestedRole)
+      ? requestedRole
+      : roles.includes(user.lastActiveRole) ? user.lastActiveRole : roles[0];
     const token = crypto.randomBytes(32).toString("hex");
     db.sessions = db.sessions.filter((item) => item.userId !== user.id);
-    db.sessions.push({ token, userId: user.id, createdAt: now(), expiresAt: new Date(Date.now() + SESSION_TTL_MS).toISOString() });
+    db.sessions.push({ token, userId: user.id, activeRole, createdAt: now(), expiresAt: new Date(Date.now() + SESSION_TTL_MS).toISOString() });
+    user.lastActiveRole = activeRole;
     await writeDb(db);
-    return send(res, 200, { token, user: cleanUser(user) });
+    return send(res, 200, { token, user: cleanUser({ ...user, role: activeRole, roles }) });
   }
 
   if (key === "POST /api/auth/logout") {
@@ -757,6 +846,43 @@ async function handleApi(req, res, pathname, searchParams, body = {}) {
           .filter(Boolean)
       : [];
     return send(res, 200, { user: cleanUser(user), classes, students });
+  }
+
+  if (key === "POST /api/auth/roles") {
+    const user = requireUser(db, req);
+    if (user.role === "admin") fail(403, "管理员不能添加普通身份");
+    const role = String(body.role || "");
+    if (!["teacher", "parent"].includes(role)) fail(400, "身份无效");
+    const storedUser = db.users.find((item) => item.id === user.id);
+    const roles = userRoles(storedUser);
+    if (roles.includes(role)) {
+      return send(res, 200, { user: cleanUser({ ...storedUser, role: user.role, roles }), alreadyExists: true });
+    }
+    roles.push(role);
+    storedUser.roles = roles;
+    storedUser.updatedAt = now();
+    logOperation(db, req, user, "add_user_role", "user", user.id, null, { role });
+    await writeDb(db);
+    return send(res, 200, { user: cleanUser({ ...storedUser, role: user.role, roles }) });
+  }
+
+  if (key === "POST /api/auth/switch-role") {
+    const user = requireUser(db, req);
+    if (user.role === "admin") fail(403, "管理员不能切换普通身份");
+    const role = String(body.role || "");
+    const storedUser = db.users.find((item) => item.id === user.id);
+    const roles = userRoles(storedUser);
+    if (!roles.includes(role)) fail(403, "尚未开通该身份");
+    if (role === user.role) {
+      return send(res, 200, { user: cleanUser({ ...storedUser, role, roles }), alreadyActive: true });
+    }
+    const session = db.sessions.find((item) => item.token === getToken(req));
+    session.activeRole = role;
+    storedUser.lastActiveRole = role;
+    storedUser.updatedAt = now();
+    logOperation(db, req, { ...user, role }, "switch_user_role", "user", user.id, { role: user.role }, { role });
+    await writeDb(db);
+    return send(res, 200, { user: cleanUser({ ...storedUser, role, roles }) });
   }
 
   const user = requireUser(db, req);
@@ -929,7 +1055,7 @@ async function handleApi(req, res, pathname, searchParams, body = {}) {
         ...student,
         parents: db.parentStudentRelations
           .filter((rel) => rel.studentId === student.id)
-          .map((rel) => ({ ...rel, parent: publicUser(db.users.find((item) => item.id === rel.parentUserId)) }))
+          .map((rel) => ({ ...rel, parent: publicUser(db.users.find((item) => item.id === rel.parentUserId), "parent") }))
       }));
     return send(res, 200, { students: decorateStudentsForTeacher(students, db) });
   }
@@ -1049,7 +1175,7 @@ async function handleApi(req, res, pathname, searchParams, body = {}) {
     const studentId = String(body.studentId || "").trim();
     const relationType = String(body.relationType || "监护人").trim();
     if (!parentAccount || !studentId) fail(400, "家长账号和学生不能为空");
-    const parent = db.users.find((item) => item.account === parentAccount && item.role === "parent" && item.status === "active");
+    const parent = db.users.find((item) => item.account === parentAccount && hasRole(item, "parent") && item.status === "active");
     if (!parent) fail(404, "家长账号不存在或不是启用状态");
     const student = db.students.find((item) => item.id === studentId);
     if (!student) fail(404, "学生不存在");
@@ -1122,14 +1248,16 @@ async function handleApi(req, res, pathname, searchParams, body = {}) {
         studentId,
         date,
         createdBy: user.id,
+        createdByRole: user.role,
         lastModifiedBy: user.id,
+        lastModifiedByRole: user.role,
         createdAt: now(),
         updatedAt: now(),
         ...payload
       };
       db.attendanceRecords.push(attendance);
     } else {
-      Object.assign(attendance, payload, { lastModifiedBy: user.id, updatedAt: now() });
+      Object.assign(attendance, payload, { lastModifiedBy: user.id, lastModifiedByRole: user.role, updatedAt: now() });
     }
     logOperation(db, req, user, before ? "update_attendance" : "create_attendance", "attendance", attendance.id, before, attendance, { studentId, date });
     await writeDb(db);
@@ -1162,12 +1290,16 @@ async function handleApi(req, res, pathname, searchParams, body = {}) {
       content: textInput(body.content, "任务内容", 2000),
       teacherRemark: "",
       teacherRemarkBy: null,
+      teacherRemarkByRole: null,
       teacherRemarkAt: null,
       status: "pending",
       completed: false,
       createdBy: user.id,
+      createdByRole: user.role,
       lastModifiedBy: user.id,
+      lastModifiedByRole: user.role,
       completedBy: null,
+      completedByRole: null,
       completedAt: null,
       deleted: false,
       createdAt: now(),
@@ -1185,13 +1317,14 @@ async function handleApi(req, res, pathname, searchParams, body = {}) {
     const task = db.dailyTasks.find((item) => item.id === taskById[1] && !item.deleted);
     if (!task) fail(404, "任务不存在");
     if (!canAccessStudent(db, user, task.studentId)) fail(403, "没有学生权限");
-    if (user.role !== "admin" && task.createdBy !== user.id) fail(403, "只能修改自己创建的任务");
+    if (!canManageOwnTask(db, user, task)) fail(403, "只能修改当前身份创建的任务");
     if (user.role !== "admin" && taskStatus(task) === "completed") fail(403, "已完成任务不能修改");
     const title = textInput(body.title, "任务标题", 200, true);
     const before = { ...task };
     task.title = title;
     task.content = textInput(body.content ?? task.content, "任务内容", 2000);
     task.lastModifiedBy = user.id;
+    task.lastModifiedByRole = user.role;
     task.updatedAt = now();
     logOperation(db, req, user, "update_task", "task", task.id, before, task, { studentId: task.studentId, date: task.date });
     await writeDb(db);
@@ -1207,8 +1340,10 @@ async function handleApi(req, res, pathname, searchParams, body = {}) {
     const before = { ...task };
     task.teacherRemark = textInput(body.teacherRemark, "教师批注", 2000);
     task.teacherRemarkBy = task.teacherRemark ? user.id : null;
+    task.teacherRemarkByRole = task.teacherRemark ? user.role : null;
     task.teacherRemarkAt = task.teacherRemark ? now() : null;
     task.lastModifiedBy = user.id;
+    task.lastModifiedByRole = user.role;
     task.updatedAt = now();
     logOperation(db, req, user, "update_task_teacher_remark", "task", task.id, before, task, { studentId: task.studentId, date: task.date });
     await writeDb(db);
@@ -1220,11 +1355,12 @@ async function handleApi(req, res, pathname, searchParams, body = {}) {
     const task = db.dailyTasks.find((item) => item.id === taskById[1] && !item.deleted);
     if (!task) fail(404, "任务不存在");
     if (!canAccessStudent(db, user, task.studentId)) fail(403, "没有学生权限");
-    if (user.role !== "admin" && task.createdBy !== user.id) fail(403, "只能删除自己创建的任务");
+    if (!canManageOwnTask(db, user, task)) fail(403, "只能删除当前身份创建的任务");
     if (user.role !== "admin" && taskStatus(task) === "completed") fail(403, "已完成任务不能删除");
     const before = { ...task };
     task.deleted = true;
     task.lastModifiedBy = user.id;
+    task.lastModifiedByRole = user.role;
     task.updatedAt = now();
     logOperation(db, req, user, "delete_task", "task", task.id, before, task, { studentId: task.studentId, date: task.date });
     await writeDb(db);
@@ -1244,8 +1380,10 @@ async function handleApi(req, res, pathname, searchParams, body = {}) {
     task.status = status;
     task.completed = status === "completed";
     task.completedBy = task.completed ? user.id : null;
+    task.completedByRole = task.completed ? user.role : null;
     task.completedAt = task.completed ? now() : null;
     task.lastModifiedBy = user.id;
+    task.lastModifiedByRole = user.role;
     task.updatedAt = now();
     logOperation(db, req, user, task.completed ? "complete_task" : "mark_task_pending", "task", task.id, before, task, { studentId: task.studentId, date: task.date });
     await writeDb(db);
@@ -1292,7 +1430,10 @@ async function handleApi(req, res, pathname, searchParams, body = {}) {
     let logs = db.operationLogs;
     if (studentId) logs = logs.filter((item) => item.studentId === studentId);
     if (user.role !== "admin") {
-      logs = logs.filter((item) => item.operatorUserId === user.id || (item.studentId && canAccessStudent(db, user, item.studentId)));
+      logs = logs.filter((item) =>
+        (item.operatorUserId === user.id && item.operatorRole === user.role) ||
+        (item.studentId && canAccessStudent(db, user, item.studentId))
+      );
     }
     logs.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
     const requestedOffset = Number(searchParams.get("offset"));

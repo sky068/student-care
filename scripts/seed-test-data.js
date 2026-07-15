@@ -90,6 +90,8 @@ function upsertUser(store, account, name, role) {
       name,
       phone: account,
       role,
+      roles: [role],
+      lastActiveRole: role,
       wechatOpenid: "",
       wechatUnionid: "",
       status: "active",
@@ -99,7 +101,10 @@ function upsertUser(store, account, name, role) {
     store.users.push(user);
   } else {
     user.name = name;
-    user.role = role;
+    if (!["teacher", "parent"].includes(user.role)) user.role = role;
+    const roles = Array.isArray(user.roles) ? user.roles.filter((item) => ["teacher", "parent"].includes(item)) : [user.role];
+    user.roles = [...new Set([...roles, role])];
+    if (!user.roles.includes(user.lastActiveRole)) user.lastActiveRole = user.role;
     user.status = "active";
     user.updatedAt = now();
   }
@@ -191,11 +196,18 @@ for (const spec of studentSpecs) {
       date: taskDate,
       title: task.title,
       content: task.content,
+      teacherRemark: "",
+      teacherRemarkBy: null,
+      teacherRemarkByRole: null,
+      teacherRemarkAt: null,
       status: "pending",
       completed: false,
       createdBy: parent.id,
+      createdByRole: "parent",
       lastModifiedBy: parent.id,
+      lastModifiedByRole: "parent",
       completedBy: null,
+      completedByRole: null,
       completedAt: null,
       deleted: false,
       createdAt: now(),

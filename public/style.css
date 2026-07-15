@@ -252,6 +252,26 @@ textarea:focus {
   font-size: 13px;
 }
 
+.identity-switcher {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+  margin-bottom: 18px;
+}
+
+.identity-switcher .field {
+  min-width: 0;
+}
+
+.identity-switcher button {
+  white-space: nowrap;
+}
+
+.empty-workspace-panel .actions {
+  margin-top: 16px;
+}
+
 .main {
   padding: 24px;
   min-width: 0;
