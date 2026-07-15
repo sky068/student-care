@@ -104,6 +104,57 @@ function escapeAttr(value) {
   return escapeHtml(value).replaceAll("\n", " ");
 }
 
+function configureTaskDialog(dialog, { titleInput, selectTitle = false, trigger = null } = {}) {
+  const closeButton = dialog.querySelector("[data-modal-close]");
+  const panel = dialog.querySelector("[role='dialog']");
+  const appWasInert = app.hasAttribute("inert");
+  let closed = false;
+
+  if (!appWasInert) app.setAttribute("inert", "");
+
+  const closeDialog = () => {
+    if (closed) return;
+    closed = true;
+    document.removeEventListener("keydown", handleKeydown);
+    dialog.remove();
+    if (!appWasInert) app.removeAttribute("inert");
+    if (trigger?.isConnected) trigger.focus({ preventScroll: true });
+  };
+  const handleKeydown = (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeDialog();
+      return;
+    }
+    if (event.key !== "Tab" || !panel) return;
+    const focusable = [...panel.querySelectorAll("button:not([disabled]), input:not([disabled]), textarea:not([disabled])")];
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+
+  document.addEventListener("keydown", handleKeydown);
+  closeButton?.addEventListener("click", closeDialog);
+  dialog.addEventListener("click", (event) => {
+    if (event.target === dialog) closeDialog();
+  });
+
+  if (window.matchMedia("(max-width: 640px), (any-pointer: coarse)").matches) {
+    closeButton?.focus({ preventScroll: true });
+  } else {
+    titleInput?.focus({ preventScroll: true });
+    if (selectTitle) titleInput?.select();
+  }
+  return closeDialog;
+}
+
 function getTaskStatus(task) {
   if (task.status === "completed" || task.status === "pending") return task.status;
   return task.completed ? "completed" : "pending";
@@ -1142,22 +1193,15 @@ function renderTaskPanel() {
   `;
 }
 
-function renderCreateTaskDialog() {
+function renderCreateTaskDialog(trigger = null) {
   const selectedStudent = state.students.find((item) => item.id === state.selectedStudentId);
   if (!selectedStudent) return;
   const dialog = document.createElement("div");
   dialog.className = "modal-backdrop";
-  const closeDialog = () => {
-    document.removeEventListener("keydown", handleKeydown);
-    dialog.remove();
-  };
-  const handleKeydown = (event) => {
-    if (event.key === "Escape") closeDialog();
-  };
   dialog.innerHTML = html`
-    <div class="modal task-form-modal">
+    <div class="modal task-form-modal" role="dialog" aria-modal="true" aria-labelledby="createTaskDialogTitle">
       <div class="item-title">
-        <h3 style="margin:0;">新建任务</h3>
+        <h3 id="createTaskDialogTitle" style="margin:0;">新建任务</h3>
         <button class="text" type="button" data-modal-close>关闭</button>
       </div>
       <div class="notice task-dialog-context">
@@ -1166,22 +1210,21 @@ function renderCreateTaskDialog() {
       </div>
       <form id="createTaskForm" class="form-grid" style="margin-top:14px;">
         <div class="field">
-          <label>任务标题</label>
-          <input name="title" required />
+          <label for="createTaskTitle">任务标题</label>
+          <input id="createTaskTitle" name="title" required />
         </div>
         <div class="field">
-          <label>任务内容</label>
-          <textarea name="content" placeholder="选填"></textarea>
+          <label for="createTaskContent">任务内容</label>
+          <textarea id="createTaskContent" name="content" placeholder="选填"></textarea>
         </div>
         <button class="primary" type="submit">创建任务</button>
       </form>
     </div>
   `;
   document.body.appendChild(dialog);
-  document.addEventListener("keydown", handleKeydown);
-  dialog.querySelector("[data-modal-close]").addEventListener("click", closeDialog);
-  dialog.addEventListener("click", (event) => {
-    if (event.target === dialog) closeDialog();
+  const closeDialog = configureTaskDialog(dialog, {
+    titleInput: dialog.querySelector("input[name='title']"),
+    trigger
   });
   dialog.querySelector("#createTaskForm").addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -1207,35 +1250,36 @@ function renderCreateTaskDialog() {
       toast(error.message);
     }
   });
-  dialog.querySelector("input[name='title']")?.focus();
 }
 
-function renderEditTaskDialog(task) {
+function renderEditTaskDialog(task, trigger = null) {
   const dialog = document.createElement("div");
   dialog.className = "modal-backdrop";
   dialog.innerHTML = html`
-    <div class="modal">
+    <div class="modal task-form-modal" role="dialog" aria-modal="true" aria-labelledby="editTaskDialogTitle">
       <div class="item-title">
-        <h3 style="margin:0;">编辑任务</h3>
+        <h3 id="editTaskDialogTitle" style="margin:0;">编辑任务</h3>
         <button class="text" type="button" data-modal-close>关闭</button>
       </div>
       <form id="editTaskForm" class="form-grid" style="margin-top:14px;">
         <div class="field">
-          <label>任务标题</label>
-          <input name="title" value="${escapeAttr(task.title)}" required />
+          <label for="editTaskTitle">任务标题</label>
+          <input id="editTaskTitle" name="title" value="${escapeAttr(task.title)}" required />
         </div>
         <div class="field">
-          <label>任务内容</label>
-          <textarea name="content">${escapeHtml(task.content || "")}</textarea>
+          <label for="editTaskContent">任务内容</label>
+          <textarea id="editTaskContent" name="content">${escapeHtml(task.content || "")}</textarea>
         </div>
         <button class="primary" type="submit">保存修改</button>
       </form>
     </div>
   `;
   document.body.appendChild(dialog);
-  dialog.querySelector("[data-modal-close]").addEventListener("click", () => dialog.remove());
-  dialog.addEventListener("click", (event) => {
-    if (event.target === dialog) dialog.remove();
+  const titleInput = dialog.querySelector("input[name='title']");
+  const closeDialog = configureTaskDialog(dialog, {
+    titleInput,
+    selectTitle: true,
+    trigger
   });
   dialog.querySelector("#editTaskForm").addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -1244,7 +1288,7 @@ function renderEditTaskDialog(task) {
     try {
       await api(`/api/tasks/${task.id}`, { method: "PUT", body: formData(event.currentTarget) });
       toast("任务已更新");
-      dialog.remove();
+      closeDialog();
       await loadWorkspaceData();
       renderApp();
     } catch (error) {
@@ -1252,9 +1296,6 @@ function renderEditTaskDialog(task) {
       toast(error.message);
     }
   });
-  const titleInput = dialog.querySelector("input[name='title']");
-  titleInput?.focus();
-  titleInput?.select();
 }
 
 function renderClassPanel() {
@@ -2135,11 +2176,13 @@ function bindAppEvents() {
   document.querySelectorAll("[data-edit-task]").forEach((button) => {
     button.addEventListener("click", () => {
       const task = state.tasks.find((item) => item.id === button.dataset.editTask);
-      if (task && canManageTask(task)) renderEditTaskDialog(task);
+      if (task && canManageTask(task)) renderEditTaskDialog(task, button);
     });
   });
 
-  document.querySelector("[data-action='show-create-task']")?.addEventListener("click", renderCreateTaskDialog);
+  document.querySelector("[data-action='show-create-task']")?.addEventListener("click", (event) => {
+    renderCreateTaskDialog(event.currentTarget);
+  });
 
   document.querySelector("[data-action='copy-class-code']")?.addEventListener("click", async (event) => {
     try {

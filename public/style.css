@@ -766,6 +766,12 @@ textarea:focus {
   min-height: 110px;
 }
 
+.task-form-modal {
+  max-height: calc(100vh - 36px);
+  max-height: calc(100svh - 36px);
+  overflow-y: auto;
+}
+
 .task-card {
   padding: 14px;
   border-color: var(--line-strong);
@@ -1489,6 +1495,7 @@ textarea:focus {
 
   .modal {
     width: 100%;
+    max-height: calc(100vh - 24px);
     max-height: calc(100svh - 24px);
     overflow-y: auto;
     border-width: 1px 0 0;
@@ -1498,6 +1505,7 @@ textarea:focus {
   }
 
   .class-settings-modal {
+    max-height: calc(100vh - 24px);
     max-height: calc(100svh - 24px);
   }
 
