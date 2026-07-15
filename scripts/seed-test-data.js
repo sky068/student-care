@@ -24,8 +24,9 @@ const collections = [
 ];
 
 function hashPassword(password, salt = crypto.randomBytes(16).toString("hex")) {
-  const hash = crypto.pbkdf2Sync(password, salt, 100000, 32, "sha256").toString("hex");
-  return `${salt}:${hash}`;
+  const iterations = 600000;
+  const hash = crypto.pbkdf2Sync(password, salt, iterations, 32, "sha256").toString("hex");
+  return `pbkdf2$${iterations}$${salt}$${hash}`;
 }
 
 function id(prefix) {

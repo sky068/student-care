@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { once } from "node:events";
 import crypto from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -11,6 +12,8 @@ const port = 31000 + Math.floor(Math.random() * 1000);
 const baseUrl = `http://127.0.0.1:${port}`;
 let dataDir;
 let server;
+let adminAccount = "test-admin";
+let adminPassword = "admin123456";
 
 async function request(pathname, { token, activeRole, ...options } = {}) {
   const headers = { "content-type": "application/json", ...(options.headers || {}) };
@@ -34,6 +37,29 @@ async function waitForServer() {
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   throw new Error("测试服务器启动超时");
+}
+
+async function startServer() {
+  server = spawn(process.execPath, ["server.js"], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      PORT: String(port),
+      DATA_DIR: dataDir,
+      ADMIN_ACCOUNT: adminAccount,
+      ADMIN_PASSWORD: adminPassword,
+      ADMIN_NAME: "测试管理员"
+    },
+    stdio: "ignore"
+  });
+  await waitForServer();
+}
+
+async function stopServer() {
+  if (!server || server.exitCode !== null) return;
+  const exited = once(server, "exit");
+  server.kill();
+  await exited;
 }
 
 async function registerAndLogin(account, role) {
@@ -69,6 +95,18 @@ test.before(async () => {
   };
   database.prepare("INSERT INTO app_records (collection, id, data, updated_at) VALUES (?, ?, ?, ?)")
     .run("users", legacyUser.id, JSON.stringify(legacyUser), legacyUser.updatedAt);
+  const legacyAdmin = {
+    id: "usr_legacy_admin",
+    account: "old-env-admin",
+    passwordHash: legacyPasswordHash("old-admin-password"),
+    name: "旧版管理员",
+    role: "admin",
+    status: "active",
+    createdAt: legacyUser.createdAt,
+    updatedAt: legacyUser.updatedAt
+  };
+  database.prepare("INSERT INTO app_records (collection, id, data, updated_at) VALUES (?, ?, ?, ?)")
+    .run("users", legacyAdmin.id, JSON.stringify(legacyAdmin), legacyAdmin.updatedAt);
   const legacyTask = {
     id: "tsk_legacy",
     studentId: "stu_legacy",
@@ -99,27 +137,19 @@ test.before(async () => {
   const legacySession = { token: "legacy_session_token", userId: legacyUser.id, createdAt: new Date().toISOString() };
   insertRecord.run("sessions", legacySession.token, JSON.stringify(legacySession), legacySession.createdAt);
   database.close();
-  server = spawn(process.execPath, ["server.js"], {
-    cwd: process.cwd(),
-    env: {
-      ...process.env,
-      PORT: String(port),
-      DATA_DIR: dataDir,
-      ADMIN_ACCOUNT: "test-admin",
-      ADMIN_PASSWORD: "admin123456",
-      ADMIN_NAME: "测试管理员"
-    },
-    stdio: "ignore"
-  });
-  await waitForServer();
+  await startServer();
 });
 
 test.after(async () => {
-  server?.kill();
+  await stopServer();
   await rm(dataDir, { recursive: true, force: true });
 });
 
 test("旧版单角色账号自动兼容为身份列表", async () => {
+  const homeResponse = await fetch(baseUrl);
+  assert.equal(homeResponse.headers.get("x-content-type-options"), "nosniff");
+  assert.equal(homeResponse.headers.get("x-frame-options"), "DENY");
+  assert.match(homeResponse.headers.get("content-security-policy") || "", /frame-ancestors 'none'/);
   let result = await request("/api/auth/me", { token: "legacy_session_token" });
   assert.equal(result.response.status, 200, "缺少 activeRole 的旧会话应继续有效");
   assert.equal(result.body.user.role, "parent");
@@ -133,9 +163,11 @@ test("旧版单角色账号自动兼容为身份列表", async () => {
   assert.equal(result.body.user.role, "parent");
   assert.deepEqual(result.body.user.roles, ["parent"]);
   const database = new Database(path.join(dataDir, "stumng.sqlite"), { readonly: true });
+  const migratedUser = JSON.parse(database.prepare("SELECT data FROM app_records WHERE collection = ? AND id = ?").get("users", "usr_legacy_parent").data);
   const migratedTask = JSON.parse(database.prepare("SELECT data FROM app_records WHERE collection = ? AND id = ?").get("dailyTasks", "tsk_legacy").data);
   const migratedAttendance = JSON.parse(database.prepare("SELECT data FROM app_records WHERE collection = ? AND id = ?").get("attendanceRecords", "att_legacy").data);
   database.close();
+  assert.match(migratedUser.passwordHash, /^pbkdf2\$600000\$/, "旧密码哈希应在成功登录后升级");
   assert.equal(migratedTask.createdByRole, "parent");
   assert.equal(migratedTask.lastModifiedByRole, "parent");
   assert.equal(migratedAttendance.createdByRole, "parent");
@@ -289,9 +321,91 @@ test("管理员身份不能开通或切换普通身份", async () => {
     body: { account: "test-admin", password: "admin123456" }
   });
   assert.equal(result.response.status, 200);
+  assert.equal(result.body.user.environmentPasswordFingerprint, undefined, "管理员响应不能暴露环境密码校验哈希");
+  const oldAdminLogin = await request("/api/auth/login", {
+    method: "POST",
+    body: { account: "old-env-admin", password: "old-admin-password" }
+  });
+  assert.equal(oldAdminLogin.response.status, 401, "旧版环境管理员应迁移而不是保留第二个入口");
   const token = result.body.token;
   result = await request("/api/auth/roles", { token, method: "POST", body: { role: "parent" } });
   assert.equal(result.response.status, 403);
   result = await request("/api/auth/switch-role", { token, method: "POST", body: { role: "parent" } });
   assert.equal(result.response.status, 403);
+});
+
+test("环境管理员可安全改名且网页改密不会被旧环境密码覆盖", async () => {
+  let result = await request("/api/auth/login", {
+    method: "POST",
+    body: { account: adminAccount, password: adminPassword }
+  });
+  assert.equal(result.response.status, 200);
+  const adminId = result.body.user.id;
+  const webPassword = "web-password-123456";
+  result = await request(`/api/users/${adminId}/password`, {
+    token: result.body.token,
+    method: "PATCH",
+    body: { newPassword: webPassword }
+  });
+  assert.equal(result.response.status, 200);
+
+  await stopServer();
+  await startServer();
+  result = await request("/api/auth/login", {
+    method: "POST",
+    body: { account: adminAccount, password: webPassword }
+  });
+  assert.equal(result.response.status, 200, "服务重启后应保留网页修改的管理员密码");
+  result = await request("/api/auth/login", {
+    method: "POST",
+    body: { account: adminAccount, password: adminPassword }
+  });
+  assert.equal(result.response.status, 401, "旧环境密码不应在普通重启后恢复");
+
+  await stopServer();
+  const oldAccount = adminAccount;
+  adminAccount = "test-admin-renamed";
+  await startServer();
+  result = await request("/api/auth/login", {
+    method: "POST",
+    body: { account: oldAccount, password: webPassword }
+  });
+  assert.equal(result.response.status, 401, "环境管理员改名后旧账号必须失效");
+  result = await request("/api/auth/login", {
+    method: "POST",
+    body: { account: adminAccount, password: webPassword }
+  });
+  assert.equal(result.response.status, 200);
+
+  await stopServer();
+  adminPassword = "rotated-environment-password";
+  await startServer();
+  result = await request("/api/auth/login", {
+    method: "POST",
+    body: { account: adminAccount, password: adminPassword }
+  });
+  assert.equal(result.response.status, 200, "环境密码改为新值后应主动轮换管理员密码");
+  result = await request("/api/auth/login", {
+    method: "POST",
+    body: { account: adminAccount, password: webPassword }
+  });
+  assert.equal(result.response.status, 401);
+});
+
+test("环境管理员账号不能覆盖已有普通账号", async () => {
+  await stopServer();
+  server = spawn(process.execPath, ["server.js"], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      PORT: String(port),
+      DATA_DIR: dataDir,
+      ADMIN_ACCOUNT: "parent",
+      ADMIN_PASSWORD: "another-admin-password",
+      ADMIN_NAME: "冲突管理员"
+    },
+    stdio: "ignore"
+  });
+  const [exitCode] = await once(server, "exit");
+  assert.notEqual(exitCode, 0, "普通账号与环境管理员账号冲突时服务必须拒绝启动");
 });

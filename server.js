@@ -13,9 +13,11 @@ const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : pat
 const DB_FILE = path.join(DATA_DIR, "stumng.sqlite");
 const PUBLIC_DIR = path.join(__dirname, "public");
 const PORT = Number(process.env.PORT || 3000);
+const HOST = process.env.HOST || "127.0.0.1";
 const ADMIN_ACCOUNT = process.env.ADMIN_ACCOUNT || "";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "";
 const ADMIN_NAME = process.env.ADMIN_NAME || "系统管理员";
+const TRUST_PROXY = ["1", "true", "yes"].includes(String(process.env.TRUST_PROXY || "").toLowerCase());
 const LOG_HOT_DAYS = 14;
 const LOG_RETENTION_DAYS = 180;
 const LOG_MAINTENANCE_INTERVAL_MS = 24 * 60 * 60 * 1000;
@@ -24,6 +26,7 @@ const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const BUSINESS_TIME_ZONE = "Asia/Shanghai";
 const AUTH_RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
 const AUTH_RATE_LIMIT_MAX = 30;
+const PASSWORD_HASH_ITERATIONS = 600000;
 const authAttempts = new Map();
 
 function loadEnvFile(filePath) {
@@ -58,6 +61,13 @@ const initialDb = {
 };
 
 const jsonHeaders = { "content-type": "application/json; charset=utf-8" };
+const securityHeaders = {
+  "x-content-type-options": "nosniff",
+  "x-frame-options": "DENY",
+  "referrer-policy": "strict-origin-when-cross-origin",
+  "permissions-policy": "camera=(), microphone=(), geolocation=()",
+  "content-security-policy": "default-src 'self'; img-src 'self' data: https://images.unsplash.com; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+};
 const staticTypes = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
@@ -208,18 +218,47 @@ async function initConfiguredAdmin() {
     return;
   }
   const db = await readDb();
-  const existing = db.users.find((item) => item.account === ADMIN_ACCOUNT);
+  const managedAdmins = db.users.filter((item) => item.environmentManagedAdmin === true);
+  if (managedAdmins.length > 1) throw new Error("检测到多个环境托管管理员，拒绝启动，请先修复管理员数据");
+  const managedAdmin = managedAdmins[0];
+  const accountOwner = db.users.find((item) => item.account === ADMIN_ACCOUNT);
+  const legacyAdmins = db.users.filter((item) => item.role === "admin" && item.environmentManagedAdmin !== true);
+  if (managedAdmin && accountOwner && accountOwner.id !== managedAdmin.id) {
+    throw new Error(`ADMIN_ACCOUNT ${ADMIN_ACCOUNT} 已被其他账号占用，拒绝启动以避免错误提权`);
+  }
+  if (!managedAdmin && accountOwner && accountOwner.role !== "admin") {
+    throw new Error(`ADMIN_ACCOUNT ${ADMIN_ACCOUNT} 已被普通账号占用，拒绝将其自动提升为管理员`);
+  }
+  if (!managedAdmin && legacyAdmins.length > 1) {
+    throw new Error("检测到多个旧版管理员，无法判断环境托管账号，拒绝自动新增管理员");
+  }
+
+  const existing = managedAdmin || accountOwner || (legacyAdmins.length === 1 ? legacyAdmins[0] : null);
+  let changed = false;
   if (existing) {
-    const passwordChanged = !verifyPassword(ADMIN_PASSWORD, existing.passwordHash);
-    existing.name = ADMIN_NAME;
-    existing.phone = ADMIN_ACCOUNT;
-    existing.role = "admin";
-    existing.roles = ["admin"];
-    existing.lastActiveRole = "admin";
-    existing.passwordHash = hashPassword(ADMIN_PASSWORD);
-    existing.status = "active";
-    existing.updatedAt = now();
-    if (passwordChanged) db.sessions = db.sessions.filter((item) => item.userId !== existing.id);
+    const update = (field, value) => {
+      if (existing[field] === value) return;
+      existing[field] = value;
+      changed = true;
+    };
+    update("account", ADMIN_ACCOUNT);
+    update("name", ADMIN_NAME);
+    update("phone", ADMIN_ACCOUNT);
+    update("role", "admin");
+    if (JSON.stringify(existing.roles || []) !== JSON.stringify(["admin"])) update("roles", ["admin"]);
+    update("lastActiveRole", "admin");
+    update("status", "active");
+    update("environmentManagedAdmin", true);
+
+    const environmentPasswordChanged = !existing.environmentPasswordFingerprint ||
+      !verifyPassword(ADMIN_PASSWORD, existing.environmentPasswordFingerprint);
+    if (environmentPasswordChanged) {
+      existing.passwordHash = hashPassword(ADMIN_PASSWORD);
+      existing.environmentPasswordFingerprint = hashPassword(ADMIN_PASSWORD);
+      db.sessions = db.sessions.filter((item) => item.userId !== existing.id);
+      changed = true;
+    }
+    if (changed) existing.updatedAt = now();
   } else {
     db.users.push({
       id: id("usr"),
@@ -230,14 +269,17 @@ async function initConfiguredAdmin() {
       role: "admin",
       roles: ["admin"],
       lastActiveRole: "admin",
+      environmentManagedAdmin: true,
+      environmentPasswordFingerprint: hashPassword(ADMIN_PASSWORD),
       wechatOpenid: "",
       wechatUnionid: "",
       status: "active",
       createdAt: now(),
       updatedAt: now()
     });
+    changed = true;
   }
-  await writeDb(db);
+  if (changed) await writeDb(db);
   console.log(`Configured admin ready: ${ADMIN_ACCOUNT}`);
 }
 
@@ -258,14 +300,37 @@ function businessToday() {
   }).format(new Date());
 }
 
-function hashPassword(password, salt = crypto.randomBytes(16).toString("hex")) {
-  const hash = crypto.pbkdf2Sync(password, salt, 100000, 32, "sha256").toString("hex");
-  return `${salt}:${hash}`;
+function hashPassword(password, salt = crypto.randomBytes(16).toString("hex"), iterations = PASSWORD_HASH_ITERATIONS) {
+  const hash = crypto.pbkdf2Sync(password, salt, iterations, 32, "sha256").toString("hex");
+  return `pbkdf2$${iterations}$${salt}$${hash}`;
 }
 
 function verifyPassword(password, stored) {
-  const [salt] = stored.split(":");
-  return hashPassword(password, salt) === stored;
+  if (typeof stored !== "string") return false;
+  let salt;
+  let expectedHex;
+  let iterations;
+  if (stored.startsWith("pbkdf2$")) {
+    const parts = stored.split("$");
+    if (parts.length !== 4) return false;
+    iterations = Number(parts[1]);
+    salt = parts[2];
+    expectedHex = parts[3];
+  } else {
+    const parts = stored.split(":");
+    if (parts.length !== 2) return false;
+    iterations = 100000;
+    [salt, expectedHex] = parts;
+  }
+  if (!Number.isInteger(iterations) || iterations < 100000 || iterations > 1000000 ||
+      expectedHex.length !== 64 || !/^[a-f0-9]+$/i.test(expectedHex)) return false;
+  const expected = Buffer.from(expectedHex, "hex");
+  const actual = crypto.pbkdf2Sync(password, salt, iterations, expected.length, "sha256");
+  return expected.length > 0 && crypto.timingSafeEqual(actual, expected);
+}
+
+function passwordHashNeedsUpgrade(stored) {
+  return !String(stored || "").startsWith(`pbkdf2$${PASSWORD_HASH_ITERATIONS}$`);
 }
 
 function normalizeDate(value) {
@@ -352,7 +417,7 @@ function ensureActorRoles(db) {
 
 function cleanUser(user) {
   if (!user) return null;
-  const { passwordHash, ...rest } = user;
+  const { passwordHash, environmentPasswordFingerprint, ...rest } = user;
   return rest;
 }
 
@@ -392,7 +457,7 @@ function ensureClassInviteCodes(db) {
 }
 
 function send(res, status, body, headers = jsonHeaders) {
-  res.writeHead(status, headers);
+  res.writeHead(status, { ...securityHeaders, ...headers });
   res.end(headers["content-type"]?.includes("application/json") ? JSON.stringify(body) : body);
 }
 
@@ -401,7 +466,8 @@ function fail(status, message) {
 }
 
 function enforceAuthRateLimit(req) {
-  const key = req.socket.remoteAddress || "unknown";
+  const forwardedFor = TRUST_PROXY ? String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() : "";
+  const key = forwardedFor || req.socket.remoteAddress || "unknown";
   const currentTime = Date.now();
   if (authAttempts.size > 10000) {
     for (const [address, timestamps] of authAttempts) {
@@ -816,6 +882,7 @@ async function handleApi(req, res, pathname, searchParams, body = {}) {
     if (password.length > 128) fail(400, "密码不能超过 128 位");
     const user = db.users.find((item) => item.account === account && item.status === "active");
     if (!user || !verifyPassword(password, user.passwordHash)) fail(401, "账号或密码错误");
+    if (passwordHashNeedsUpgrade(user.passwordHash)) user.passwordHash = hashPassword(password);
     const roles = userRoles(user);
     const requestedRole = String(body.role || "");
     const activeRole = roles.includes(requestedRole)
@@ -1463,7 +1530,7 @@ async function serveStatic(req, res, pathname) {
   try {
     const content = await readFile(normalized);
     const contentType = staticTypes[path.extname(normalized)] || "application/octet-stream";
-    res.writeHead(200, { "content-type": contentType });
+    res.writeHead(200, { ...securityHeaders, "content-type": contentType });
     res.end(content);
   } catch {
     send(res, 404, "Not found", { "content-type": "text/plain; charset=utf-8" });
@@ -1497,6 +1564,6 @@ const server = http.createServer(async (req, res) => {
 await ensureDb();
 maintainOperationLogs(openDatabase());
 await initConfiguredAdmin();
-server.listen(PORT, () => {
-  console.log(`Student care system running at http://127.0.0.1:${PORT}`);
+server.listen(PORT, HOST, () => {
+  console.log(`Student care system running at http://${HOST}:${PORT}`);
 });
