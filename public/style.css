@@ -767,6 +767,24 @@ textarea:focus {
   font-weight: 600;
 }
 
+.log-object-button {
+  min-height: 0;
+  height: auto;
+  display: block;
+  padding: 0;
+  font-weight: 650;
+  line-height: 1.4;
+  text-align: left;
+}
+
+.log-object-id {
+  margin-top: 4px;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
 .toast {
   position: fixed;
   right: 20px;
@@ -803,6 +821,15 @@ textarea:focus {
   display: none;
 }
 
+.admin-mobile-list {
+  display: none;
+}
+
+.admin-load-more {
+  width: 100%;
+  margin-top: 14px;
+}
+
 .toast.show {
   opacity: 1;
   transform: translateY(0);
@@ -825,6 +852,63 @@ textarea:focus {
   background: var(--surface);
   box-shadow: var(--shadow);
   padding: 18px;
+}
+
+.log-detail-modal {
+  width: min(780px, 100%);
+  max-height: calc(100vh - 36px);
+  overflow-y: auto;
+}
+
+.log-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 18px;
+  margin-top: 18px;
+}
+
+.log-detail-grid span,
+.log-detail-grid strong {
+  display: block;
+}
+
+.log-detail-grid span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.log-detail-grid strong {
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+}
+
+.log-detail-context {
+  margin-top: 16px;
+}
+
+.log-snapshot-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.log-snapshot-grid h4 {
+  margin: 0 0 7px;
+}
+
+.log-snapshot-grid pre {
+  max-height: 320px;
+  margin: 0;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #f7f8f6;
+  padding: 12px;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .class-settings-modal {
@@ -943,6 +1027,11 @@ textarea:focus {
     margin-left: 0;
   }
 
+  .log-detail-grid,
+  .log-snapshot-grid {
+    grid-template-columns: 1fr;
+  }
+
   .admin-sidebar {
     position: sticky;
     top: 0;
@@ -1011,6 +1100,127 @@ textarea:focus {
     box-shadow: none;
     margin: 0 -12px;
     padding: 16px;
+  }
+
+  .admin-responsive-panel {
+    border-right: 0;
+    border-left: 0;
+    border-radius: 0;
+    box-shadow: none;
+    margin: 0 -12px;
+    padding: 16px;
+  }
+
+  .admin-desktop-table {
+    display: none;
+  }
+
+  .admin-mobile-list {
+    display: grid;
+  }
+
+  .admin-mobile-record {
+    min-width: 0;
+    padding: 16px 0;
+    border-top: 1px solid var(--line);
+  }
+
+  .admin-mobile-record:first-child {
+    padding-top: 0;
+    border-top: 0;
+  }
+
+  .admin-mobile-record:last-child {
+    padding-bottom: 0;
+  }
+
+  .admin-mobile-heading {
+    min-width: 0;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .admin-mobile-heading strong {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .admin-mobile-flag {
+    margin-top: 8px;
+  }
+
+  .admin-mobile-meta {
+    display: grid;
+    gap: 8px;
+    margin: 12px 0 0;
+  }
+
+  .admin-mobile-meta div {
+    display: grid;
+    grid-template-columns: 72px minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  .admin-mobile-meta dt,
+  .admin-mobile-meta dd {
+    margin: 0;
+  }
+
+  .admin-mobile-meta dt {
+    color: var(--muted);
+    font-size: 13px;
+  }
+
+  .admin-mobile-meta dd {
+    overflow-wrap: anywhere;
+    font-size: 14px;
+  }
+
+  .admin-mobile-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    margin-top: 14px;
+  }
+
+  .admin-mobile-actions.one-action {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-mobile-actions button {
+    width: 100%;
+  }
+
+  .admin-log-operator {
+    margin-top: 5px;
+    color: var(--muted);
+    font-size: 13px;
+  }
+
+  .admin-log-list {
+    gap: 10px;
+  }
+
+  .admin-log-list .admin-mobile-record {
+    padding: 14px;
+    border: 1px solid var(--line-strong);
+    border-radius: 8px;
+    background: #fafbf9;
+  }
+
+  .admin-log-object {
+    margin: 12px 0 8px;
+    padding: 10px 0;
+    border-top: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+  }
+
+  .admin-log-object .log-object-button {
+    width: 100%;
+    min-height: 44px;
+    padding: 8px 0;
   }
 
   .admin-users-toolbar .field {

@@ -15,6 +15,14 @@ const state = {
   adminTab: "users",
   adminUserRoleFilter: "all",
   adminStudentFilter: "all",
+  adminLogView: "recent",
+  adminArchiveStartDate: new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+  adminArchiveEndDate: new Date().toISOString().slice(0, 10),
+  adminArchiveLogs: [],
+  adminRecentLogTotal: 0,
+  adminRecentLogsHaveMore: false,
+  adminArchiveLogTotal: 0,
+  adminArchiveLogsHaveMore: false,
   adminData: {
     users: [],
     classes: [],
@@ -50,7 +58,13 @@ const labels = {
   update_task_teacher_remark: "更新教师批注",
   delete_task: "删除任务",
   complete_task: "标记任务完成",
-  mark_task_pending: "标记任务待完成"
+  mark_task_pending: "标记任务待完成",
+  task: "任务",
+  attendance: "出勤",
+  student: "学生",
+  class: "班级",
+  user: "用户",
+  relation: "绑定关系"
 };
 
 function html(strings, ...values) {
@@ -292,7 +306,7 @@ async function loadWorkspaceData() {
       api("/api/classes"),
       api("/api/students"),
       api("/api/parent-student-relations"),
-      api("/api/operation-logs")
+      api("/api/operation-logs?limit=50&offset=0")
     ]);
     state.adminData = {
       users: users.users || [],
@@ -301,6 +315,8 @@ async function loadWorkspaceData() {
       relations: relations.relations || [],
       logs: logs.logs || []
     };
+    state.adminRecentLogTotal = logs.total || state.adminData.logs.length;
+    state.adminRecentLogsHaveMore = Boolean(logs.hasMore);
   } else if (state.user.role === "teacher") {
     const classes = await api("/api/classes");
     state.classes = classes.classes || [];
@@ -341,6 +357,26 @@ async function loadWorkspaceData() {
     state.tasks = [];
     state.logs = [];
   }
+}
+
+async function loadAdminArchivedLogs(append = false) {
+  const params = new URLSearchParams({
+    startDate: state.adminArchiveStartDate,
+    endDate: state.adminArchiveEndDate,
+    limit: "50",
+    offset: append ? String(state.adminArchiveLogs.length) : "0"
+  });
+  const result = await api(`/api/operation-logs/archive?${params}`);
+  state.adminArchiveLogs = append ? [...state.adminArchiveLogs, ...(result.logs || [])] : result.logs || [];
+  state.adminArchiveLogTotal = result.total || state.adminArchiveLogs.length;
+  state.adminArchiveLogsHaveMore = Boolean(result.hasMore);
+}
+
+async function loadMoreAdminRecentLogs() {
+  const result = await api(`/api/operation-logs?limit=50&offset=${state.adminData.logs.length}`);
+  state.adminData.logs = [...state.adminData.logs, ...(result.logs || [])];
+  state.adminRecentLogTotal = result.total || state.adminData.logs.length;
+  state.adminRecentLogsHaveMore = Boolean(result.hasMore);
 }
 
 function renderApp() {
@@ -498,8 +534,23 @@ function renderAdminUsers() {
 
 function renderAdminClasses() {
   return html`
-    <section class="panel">
-      <div class="table-wrap">
+    <section class="panel admin-responsive-panel">
+      <div class="admin-mobile-list">
+        ${state.adminData.classes.map((classItem) => html`
+          <article class="admin-mobile-record">
+            <div class="admin-mobile-heading">
+              <strong>${escapeHtml(classItem.className)}</strong>
+              <span class="badge ${classItem.classCodeEnabled ? "done" : "warn"}">${classItem.classCodeEnabled ? "可加入" : "已停用"}</span>
+            </div>
+            <dl class="admin-mobile-meta">
+              <div><dt>班级编号</dt><dd>${escapeHtml(classItem.classCode)}</dd></div>
+              <div><dt>教师</dt><dd>${escapeHtml((classItem.teachers || []).map((item) => `${item.teacher?.name || "教师"}(${item.role === "owner" ? "创建者" : "协同"})`).join("、") || "未绑定")}</dd></div>
+              <div><dt>创建时间</dt><dd>${new Date(classItem.createdAt).toLocaleString()}</dd></div>
+            </dl>
+          </article>
+        `).join("") || `<div class="notice">暂无班级</div>`}
+      </div>
+      <div class="table-wrap admin-desktop-table">
         <table class="table">
           <thead>
             <tr><th>班级</th><th>编号</th><th>加入状态</th><th>教师</th><th>创建时间</th></tr>
@@ -529,7 +580,7 @@ function renderAdminStudents() {
     return true;
   });
   return html`
-    <section class="panel">
+    <section class="panel admin-responsive-panel">
       <div class="toolbar" style="margin-bottom:14px;">
         <div class="field" style="max-width:220px;">
           <label>学生筛选</label>
@@ -542,7 +593,32 @@ function renderAdminStudents() {
         </div>
         <div class="muted">共 ${students.length} 个学生</div>
       </div>
-      <div class="table-wrap">
+      <div class="admin-mobile-list">
+        ${students.map((student) => html`
+          <article class="admin-mobile-record">
+            <div class="admin-mobile-heading">
+              <strong>${escapeHtml(student.displayName || student.name)}</strong>
+              <span class="badge ${student.status === "active" ? "done" : "warn"}">${student.status === "active" ? "启用" : "已移除"}</span>
+            </div>
+            ${student.isDuplicate ? `<span class="badge warn admin-mobile-flag">需核对</span>` : ""}
+            <dl class="admin-mobile-meta">
+              <div><dt>班级</dt><dd>${escapeHtml(student.class?.className || "未关联")}</dd></div>
+              <div><dt>家长</dt><dd>${escapeHtml((student.parents || []).map((item) => item.parent?.name || "家长").join("、") || "未绑定")}</dd></div>
+              <div><dt>创建时间</dt><dd>${new Date(student.createdAt).toLocaleString()}</dd></div>
+            </dl>
+            <div class="admin-mobile-actions">
+              <button data-bind-parent="${student.id}" data-student-name="${escapeAttr(student.displayName || student.name)}">绑定家长</button>
+              <button
+                class="${student.status === "active" ? "danger" : ""}"
+                data-student-status="${student.id}"
+                data-status="${student.status === "active" ? "removed" : "active"}"
+                data-student-name="${escapeAttr(student.displayName || student.name)}"
+              >${student.status === "active" ? "移除" : "恢复"}</button>
+            </div>
+          </article>
+        `).join("") || `<div class="notice">暂无学生</div>`}
+      </div>
+      <div class="table-wrap admin-desktop-table">
         <table class="table">
           <thead>
             <tr><th>学生</th><th>班级</th><th>家长</th><th>状态</th><th>创建时间</th><th>操作</th></tr>
@@ -583,8 +659,32 @@ function renderAdminStudents() {
 
 function renderAdminRelations() {
   return html`
-    <section class="panel">
-      <div class="table-wrap">
+    <section class="panel admin-responsive-panel">
+      <div class="admin-mobile-list">
+        ${state.adminData.relations.map((relation) => html`
+          <article class="admin-mobile-record">
+            <div class="admin-mobile-heading">
+              <strong>${escapeHtml(relation.student?.displayName || relation.student?.name || "未知学生")}</strong>
+              <span class="badge">${escapeHtml(relation.relationType || "监护人")}</span>
+            </div>
+            <dl class="admin-mobile-meta">
+              <div><dt>家长</dt><dd>${escapeHtml(relation.parent?.name || "未知家长")} · ${escapeHtml(relation.parent?.account || "")}</dd></div>
+              <div><dt>班级</dt><dd>${escapeHtml(relation.class?.className || "未关联")}</dd></div>
+              <div><dt>绑定时间</dt><dd>${new Date(relation.createdAt).toLocaleString()}</dd></div>
+            </dl>
+            <div class="admin-mobile-actions one-action">
+              <button
+                class="danger"
+                data-delete-relation="${relation.id}"
+                data-parent-name="${escapeAttr(relation.parent?.name || "未知家长")}"
+                data-student-name="${escapeAttr(relation.student?.displayName || relation.student?.name || "未知学生")}"
+                data-class-name="${escapeAttr(relation.class?.className || "未关联")}"
+              >解除绑定</button>
+            </div>
+          </article>
+        `).join("") || `<div class="notice">暂无绑定关系</div>`}
+      </div>
+      <div class="table-wrap admin-desktop-table">
         <table class="table">
           <thead>
             <tr><th>家长</th><th>学生</th><th>班级</th><th>关系</th><th>绑定时间</th><th>操作</th></tr>
@@ -615,30 +715,116 @@ function renderAdminRelations() {
   `;
 }
 
-function renderAdminLogs() {
+function renderAdminLogObject(log) {
   return html`
-    <section class="panel">
-      <div class="table-wrap">
+    <button class="text log-object-button" type="button" data-log-detail="${log.id}">
+      ${escapeHtml(label(log.objectType))}：${escapeHtml(log.objectName || log.objectId)}
+    </button>
+    ${log.objectContext ? `<div class="muted">${escapeHtml(log.objectContext)}</div>` : ""}
+    <div class="log-object-id">${escapeHtml(log.objectId)}</div>
+  `;
+}
+
+function renderAdminLogs() {
+  const showingArchive = state.adminLogView === "archive";
+  const logs = showingArchive ? state.adminArchiveLogs : state.adminData.logs;
+  const total = showingArchive ? state.adminArchiveLogTotal : state.adminRecentLogTotal;
+  const hasMore = showingArchive ? state.adminArchiveLogsHaveMore : state.adminRecentLogsHaveMore;
+  return html`
+    <section class="panel admin-responsive-panel">
+      <div class="toolbar" style="margin-bottom:14px;">
+        <div class="actions">
+          <button class="${showingArchive ? "" : "primary"}" type="button" data-admin-log-view="recent">最近 14 天</button>
+          <button class="${showingArchive ? "primary" : ""}" type="button" data-admin-log-view="archive">历史归档</button>
+        </div>
+        <div class="muted">已加载 ${logs.length} / ${total} 条</div>
+      </div>
+      ${showingArchive ? html`
+        <form id="archiveLogForm" class="three-col" style="margin-bottom:14px;">
+          <div class="field">
+            <label>开始日期</label>
+            <input name="startDate" type="date" value="${escapeAttr(state.adminArchiveStartDate)}" required />
+          </div>
+          <div class="field">
+            <label>结束日期</label>
+            <input name="endDate" type="date" value="${escapeAttr(state.adminArchiveEndDate)}" required />
+          </div>
+          <button class="primary" type="submit">查询归档</button>
+        </form>
+      ` : ""}
+      <div class="admin-mobile-list admin-log-list">
+        ${logs.map((log) => html`
+          <article class="admin-mobile-record">
+            <div class="admin-mobile-heading">
+              <strong>${escapeHtml(label(log.action))}</strong>
+              <span class="badge">${escapeHtml(label(log.operatorRole))}</span>
+            </div>
+            <div class="admin-log-operator">${escapeHtml(log.operatorName || "未知用户")} · ${new Date(log.createdAt).toLocaleString()}</div>
+            <div class="admin-log-object">${renderAdminLogObject(log)}</div>
+            ${log.date ? `<div class="muted">业务日期：${escapeHtml(log.date)}</div>` : ""}
+          </article>
+        `).join("") || `<div class="notice">${showingArchive ? "所选日期内暂无归档日志" : "最近 14 天暂无操作日志"}</div>`}
+      </div>
+      <div class="table-wrap admin-desktop-table">
         <table class="table">
           <thead>
             <tr><th>时间</th><th>操作人</th><th>身份</th><th>操作</th><th>对象</th><th>日期</th></tr>
           </thead>
           <tbody>
-            ${state.adminData.logs.map((log) => html`
+            ${logs.map((log) => html`
               <tr>
                 <td>${new Date(log.createdAt).toLocaleString()}</td>
                 <td>${escapeHtml(log.operatorName)}</td>
                 <td>${escapeHtml(label(log.operatorRole))}</td>
                 <td><span class="badge">${escapeHtml(label(log.action))}</span></td>
-                <td>${escapeHtml(log.objectType)}<br><span class="muted">${escapeHtml(log.objectId)}</span></td>
+                <td>${renderAdminLogObject(log)}</td>
                 <td>${escapeHtml(log.date || "")}</td>
               </tr>
-            `).join("")}
+            `).join("") || `<tr><td colspan="6" class="muted">${showingArchive ? "所选日期内暂无归档日志" : "最近 14 天暂无操作日志"}</td></tr>`}
           </tbody>
         </table>
       </div>
+      ${hasMore ? `<button class="admin-load-more" type="button" data-load-more-logs>加载更多（剩余 ${Math.max(total - logs.length, 0)} 条）</button>` : ""}
     </section>
   `;
+}
+
+function renderOperationLogDialog(log) {
+  const dialog = document.createElement("div");
+  dialog.className = "modal-backdrop";
+  const beforeData = log.beforeData ? JSON.stringify(log.beforeData, null, 2) : "无";
+  const afterData = log.afterData ? JSON.stringify(log.afterData, null, 2) : "无";
+  dialog.innerHTML = html`
+    <div class="modal log-detail-modal">
+      <div class="item-title">
+        <h3 style="margin:0;">操作日志详情</h3>
+        <button class="text" type="button" data-modal-close>关闭</button>
+      </div>
+      <div class="log-detail-grid">
+        <div><span>操作</span><strong>${escapeHtml(label(log.action))}</strong></div>
+        <div><span>操作人</span><strong>${escapeHtml(log.operatorName || "未知用户")}</strong></div>
+        <div><span>对象</span><strong>${escapeHtml(log.objectName || log.objectId)}</strong></div>
+        <div><span>时间</span><strong>${escapeHtml(new Date(log.createdAt).toLocaleString())}</strong></div>
+      </div>
+      ${log.objectContext ? `<div class="notice log-detail-context">${escapeHtml(log.objectContext)}</div>` : ""}
+      <div class="log-snapshot-grid">
+        <section>
+          <h4>修改前</h4>
+          <pre>${escapeHtml(beforeData)}</pre>
+        </section>
+        <section>
+          <h4>修改后</h4>
+          <pre>${escapeHtml(afterData)}</pre>
+        </section>
+      </div>
+      <div class="log-object-id">对象 ID：${escapeHtml(log.objectId)}</div>
+    </div>
+  `;
+  document.body.appendChild(dialog);
+  dialog.querySelector("[data-modal-close]").addEventListener("click", () => dialog.remove());
+  dialog.addEventListener("click", (event) => {
+    if (event.target === dialog) dialog.remove();
+  });
 }
 
 function renderSidebar() {
@@ -1365,6 +1551,54 @@ function bindAdminEvents() {
   document.querySelector("#adminStudentFilter")?.addEventListener("change", (event) => {
     state.adminStudentFilter = event.currentTarget.value;
     renderAdminApp();
+  });
+
+  document.querySelectorAll("[data-admin-log-view]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      try {
+        if (button.dataset.adminLogView === "archive") await loadAdminArchivedLogs();
+        state.adminLogView = button.dataset.adminLogView;
+        renderAdminApp();
+      } catch (error) {
+        toast(error.message);
+      }
+    });
+  });
+
+  document.querySelector("#archiveLogForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const data = formData(event.currentTarget);
+    state.adminArchiveStartDate = data.startDate;
+    state.adminArchiveEndDate = data.endDate;
+    try {
+      await loadAdminArchivedLogs();
+      renderAdminApp();
+    } catch (error) {
+      toast(error.message);
+    }
+  });
+
+  document.querySelectorAll("[data-log-detail]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const logs = state.adminLogView === "archive" ? state.adminArchiveLogs : state.adminData.logs;
+      const log = logs.find((item) => item.id === button.dataset.logDetail);
+      if (log) renderOperationLogDialog(log);
+    });
+  });
+
+  document.querySelector("[data-load-more-logs]")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    button.textContent = "加载中...";
+    try {
+      if (state.adminLogView === "archive") await loadAdminArchivedLogs(true);
+      else await loadMoreAdminRecentLogs();
+      renderAdminApp();
+    } catch (error) {
+      button.disabled = false;
+      button.textContent = "加载更多";
+      toast(error.message);
+    }
   });
 
   document.querySelectorAll("[data-user-status]").forEach((button) => {

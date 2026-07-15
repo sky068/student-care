@@ -16,6 +16,9 @@ const PORT = Number(process.env.PORT || 3000);
 const ADMIN_ACCOUNT = process.env.ADMIN_ACCOUNT || "";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "";
 const ADMIN_NAME = process.env.ADMIN_NAME || "系统管理员";
+const LOG_HOT_DAYS = 14;
+const LOG_RETENTION_DAYS = 180;
+const LOG_MAINTENANCE_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 function loadEnvFile(filePath) {
   if (!existsSync(filePath)) return;
@@ -69,11 +72,69 @@ async function ensureDb() {
       PRIMARY KEY (collection, id)
     );
     CREATE INDEX IF NOT EXISTS idx_app_records_collection ON app_records(collection);
+    CREATE TABLE IF NOT EXISTS operation_log_archive (
+      id TEXT PRIMARY KEY,
+      data TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      archived_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_operation_log_archive_created_at ON operation_log_archive(created_at);
+    CREATE TABLE IF NOT EXISTS maintenance_state (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
   `);
+}
+
+function maintainOperationLogs(database, force = false) {
+  const maintenanceKey = "operation_logs";
+  const lastRun = database.prepare("SELECT value FROM maintenance_state WHERE key = ?").get(maintenanceKey)?.value;
+  const currentTime = Date.now();
+  if (!force && lastRun && currentTime - Date.parse(lastRun) < LOG_MAINTENANCE_INTERVAL_MS) return null;
+
+  const hotCutoff = new Date(currentTime - LOG_HOT_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const retentionCutoff = new Date(currentTime - LOG_RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const rows = database.prepare("SELECT id, data, updated_at FROM app_records WHERE collection = ?").all("operationLogs");
+  const archive = database.prepare(`
+    INSERT INTO operation_log_archive (id, data, created_at, archived_at)
+    VALUES (@id, @data, @createdAt, @archivedAt)
+    ON CONFLICT(id) DO NOTHING
+  `);
+  const removeHotLog = database.prepare("DELETE FROM app_records WHERE collection = ? AND id = ?");
+  const removeExpiredArchive = database.prepare("DELETE FROM operation_log_archive WHERE created_at < ?");
+  const saveMaintenance = database.prepare(`
+    INSERT INTO maintenance_state (key, value) VALUES (?, ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+  `);
+  const stats = { archived: 0, deleted: 0 };
+  const archivedAt = new Date(currentTime).toISOString();
+
+  database.transaction(() => {
+    for (const row of rows) {
+      let log = {};
+      try {
+        log = JSON.parse(row.data);
+      } catch {}
+      const createdAt = Number.isFinite(Date.parse(log.createdAt)) ? new Date(log.createdAt).toISOString() : row.updated_at;
+      if (createdAt < retentionCutoff) {
+        removeHotLog.run("operationLogs", row.id);
+        stats.deleted += 1;
+      } else if (createdAt < hotCutoff) {
+        const result = archive.run({ id: row.id, data: row.data, createdAt, archivedAt });
+        removeHotLog.run("operationLogs", row.id);
+        stats.archived += result.changes;
+      }
+    }
+    stats.deleted += removeExpiredArchive.run(retentionCutoff).changes;
+    saveMaintenance.run(maintenanceKey, archivedAt);
+  })();
+
+  return stats;
 }
 
 async function readDb() {
   await ensureDb();
+  maintainOperationLogs(openDatabase());
   const db = Object.fromEntries(Object.keys(initialDb).map((key) => [key, []]));
   const rows = openDatabase().prepare("SELECT collection, data FROM app_records").all();
   for (const row of rows) {
@@ -372,6 +433,19 @@ function studentDuplicateKey(student) {
   return `${student.classId}|${normalizedStudentName(student.name)}`;
 }
 
+function studentDisplayName(student, group) {
+  if (!student) return "";
+  const duplicateCount = group.length;
+  const sameStudentNoCount = student.studentNo
+    ? group.filter((item) => item.studentNo === student.studentNo).length
+    : 0;
+  let identifier = student.studentNo || "";
+  if (duplicateCount > 1 && (!student.studentNo || sameStudentNoCount > 1)) {
+    identifier = student.studentNo ? `${student.studentNo} · ${student.careCode}` : student.careCode;
+  }
+  return identifier ? `${student.name}（${identifier}）` : student.name;
+}
+
 function decorateStudentsForTeacher(students, db) {
   const activeStudents = db.students.filter((item) => item.status !== "removed");
   const groups = new Map();
@@ -387,16 +461,9 @@ function decorateStudentsForTeacher(students, db) {
     const group = groups.get(studentDuplicateKey(student)) || [student];
     const duplicateCount = group.length;
     const duplicateIndex = group.findIndex((item) => item.id === student.id) + 1;
-    const sameStudentNoCount = student.studentNo
-      ? group.filter((item) => item.studentNo === student.studentNo).length
-      : 0;
-    let identifier = student.studentNo || "";
-    if (duplicateCount > 1 && (!student.studentNo || sameStudentNoCount > 1)) {
-      identifier = student.studentNo ? `${student.studentNo} · ${student.careCode}` : student.careCode;
-    }
     return {
       ...student,
-      displayName: identifier ? `${student.name}（${identifier}）` : student.name,
+      displayName: studentDisplayName(student, group),
       duplicateIndex,
       duplicateCount,
       isDuplicate: duplicateCount > 1
@@ -456,6 +523,48 @@ function decorateTask(db, task) {
     createdByUser: taskActor(db, task.createdBy, createLog),
     lastModifiedByUser: taskActor(db, lastModifiedBy, latestLog),
     completedByUser: task.completedBy ? taskActor(db, task.completedBy, completionLog) : null
+  };
+}
+
+function decorateOperationLog(db, log) {
+  const snapshot = log.afterData || log.beforeData || {};
+  const student = db.students.find((item) => item.id === (log.studentId || snapshot.studentId || snapshot.student?.id));
+  const activeStudentGroup = student
+    ? db.students.filter((item) => item.status !== "removed" && studentDuplicateKey(item) === studentDuplicateKey(student))
+    : [];
+  const studentGroup = student && !activeStudentGroup.some((item) => item.id === student.id)
+    ? [...activeStudentGroup, student]
+    : activeStudentGroup;
+  const studentName = student ? studentDisplayName(student, studentGroup.length ? studentGroup : [student]) : "";
+  let objectName = "";
+  let objectContext = "";
+
+  if (log.objectType === "task") {
+    const task = snapshot.title ? snapshot : db.dailyTasks.find((item) => item.id === log.objectId) || {};
+    objectName = task.title || "未命名任务";
+    objectContext = [studentName, log.date || task.date].filter(Boolean).join(" · ");
+  } else if (log.objectType === "attendance") {
+    objectName = studentName ? `${studentName}的出勤` : "学生出勤";
+    objectContext = log.date || snapshot.date || "";
+  } else if (log.objectType === "student") {
+    objectName = studentName || snapshot.student?.name || snapshot.name || "学生";
+  } else if (log.objectType === "class") {
+    objectName = snapshot.class?.className || snapshot.className || db.classes.find((item) => item.id === log.objectId)?.className || "班级";
+  } else if (log.objectType === "user") {
+    const targetUser = db.users.find((item) => item.id === log.objectId);
+    objectName = snapshot.name || targetUser?.name || snapshot.account || targetUser?.account || "用户";
+    objectContext = snapshot.account || targetUser?.account || "";
+  } else if (log.objectType === "relation") {
+    const relation = snapshot.id ? snapshot : db.parentStudentRelations.find((item) => item.id === log.objectId) || {};
+    const parent = db.users.find((item) => item.id === relation.parentUserId);
+    objectName = `${parent?.name || "家长"}与${studentName || "学生"}的绑定关系`;
+  }
+
+  return {
+    ...log,
+    objectName: objectName || log.objectId,
+    objectContext,
+    studentName
   };
 }
 
@@ -998,6 +1107,42 @@ async function handleApi(req, res, pathname, searchParams) {
     return send(res, 200, { task: decorateTask(db, task) });
   }
 
+  if (key === "GET /api/operation-logs/archive") {
+    requireRole(user, ["admin"]);
+    const startDate = String(searchParams.get("startDate") || "");
+    const endDate = String(searchParams.get("endDate") || "");
+    if ((startDate && !/^\d{4}-\d{2}-\d{2}$/.test(startDate)) || (endDate && !/^\d{4}-\d{2}-\d{2}$/.test(endDate))) {
+      fail(400, "日期格式必须为 YYYY-MM-DD");
+    }
+    const startValue = startDate ? new Date(`${startDate}T00:00:00.000Z`) : new Date(Date.now() - LOG_RETENTION_DAYS * 24 * 60 * 60 * 1000);
+    const endValue = endDate ? new Date(`${endDate}T23:59:59.999Z`) : new Date();
+    if (Number.isNaN(startValue.getTime()) || Number.isNaN(endValue.getTime())) fail(400, "日期无效");
+    const startAt = startValue.toISOString();
+    const endAt = endValue.toISOString();
+    if (startAt > endAt) fail(400, "开始日期不能晚于结束日期");
+    const requestedLimit = Number(searchParams.get("limit"));
+    const requestedOffset = Number(searchParams.get("offset"));
+    const limit = Number.isFinite(requestedLimit) && requestedLimit > 0 ? Math.min(Math.floor(requestedLimit), 100) : 50;
+    const offset = Number.isFinite(requestedOffset) && requestedOffset > 0 ? Math.floor(requestedOffset) : 0;
+    const database = openDatabase();
+    const total = database
+      .prepare("SELECT COUNT(*) AS count FROM operation_log_archive WHERE created_at >= ? AND created_at <= ?")
+      .get(startAt, endAt).count;
+    const rows = database
+      .prepare("SELECT data FROM operation_log_archive WHERE created_at >= ? AND created_at <= ? ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?")
+      .all(startAt, endAt, limit, offset);
+    return send(res, 200, {
+      logs: rows.map((row) => decorateOperationLog(db, JSON.parse(row.data))),
+      startDate: startAt,
+      endDate: endAt,
+      retentionDays: LOG_RETENTION_DAYS,
+      total,
+      offset,
+      nextOffset: offset + rows.length,
+      hasMore: offset + rows.length < total
+    });
+  }
+
   if (key === "GET /api/operation-logs") {
     const studentId = searchParams.get("studentId");
     let logs = db.operationLogs;
@@ -1005,7 +1150,20 @@ async function handleApi(req, res, pathname, searchParams) {
     if (user.role !== "admin") {
       logs = logs.filter((item) => !item.studentId || canAccessStudent(db, user, item.studentId) || item.operatorUserId === user.id);
     }
-    return send(res, 200, { logs: logs.slice(0, 200) });
+    logs.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+    const requestedOffset = Number(searchParams.get("offset"));
+    const offset = Number.isFinite(requestedOffset) && requestedOffset > 0 ? Math.floor(requestedOffset) : 0;
+    const requestedLimit = Number(searchParams.get("limit"));
+    const limit = Number.isFinite(requestedLimit) && requestedLimit > 0 ? Math.min(Math.floor(requestedLimit), 100) : 200;
+    const page = logs.slice(offset, offset + limit);
+    return send(res, 200, {
+      logs: page.map((log) => decorateOperationLog(db, log)),
+      hotDays: LOG_HOT_DAYS,
+      total: logs.length,
+      offset,
+      nextOffset: offset + page.length,
+      hasMore: offset + page.length < logs.length
+    });
   }
 
   fail(404, "接口不存在");
@@ -1040,6 +1198,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 await ensureDb();
+maintainOperationLogs(openDatabase());
 await initConfiguredAdmin();
 server.listen(PORT, () => {
   console.log(`Student care system running at http://127.0.0.1:${PORT}`);
