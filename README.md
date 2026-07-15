@@ -69,16 +69,22 @@ npm run seed:test
 
 脚本是幂等的，重复执行不会无限新增同一批测试数据。
 
+## 开源许可
+
+本项目基于 [MIT License](LICENSE) 开源。
 
 
-* 家长端截图:
 
-![image-20260715153409453](/Users/skyxu/Library/Application Support/typora-user-images/image-20260715153409453.png)
+### 界面预览
 
-* 教师端截图:
+家长工作台：
 
-![image-20260715154547615](/Users/skyxu/Library/Application Support/typora-user-images/image-20260715154547615.png)
+![家长工作台](doc/images/parent-dashboard.png)
 
-* 管理员端截图:
+教师工作台：
 
-![image-20260715154748136](/Users/skyxu/Library/Application Support/typora-user-images/image-20260715154748136.png)
+![教师工作台](doc/images/teacher-dashboard.png)
+
+管理后台：
+
+![管理后台](doc/images/admin-dashboard.png)
