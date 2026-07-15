@@ -337,7 +337,7 @@ textarea:focus {
 
 .date-picker-control {
   position: relative;
-  width: 168px;
+  width: 196px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 40px;
   border: 1px solid var(--line);
@@ -369,7 +369,7 @@ textarea:focus {
 }
 
 .date-picker-control input::-webkit-calendar-picker-indicator {
-  opacity: 0;
+  display: none;
 }
 
 .date-picker-control .date-picker-button {
@@ -711,6 +711,39 @@ textarea:focus {
 
 .task-list {
   gap: 10px;
+}
+
+.task-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.task-panel-header h2 {
+  margin: 0;
+}
+
+.task-dialog-context {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.task-dialog-context strong,
+.task-dialog-context span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.task-dialog-context span {
+  white-space: nowrap;
+}
+
+.task-form-modal textarea {
+  min-height: 110px;
 }
 
 .task-card {

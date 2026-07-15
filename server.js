@@ -9,7 +9,7 @@ import Database from "better-sqlite3";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 loadEnvFile(path.join(__dirname, ".env"));
 
-const DATA_DIR = path.join(__dirname, "data");
+const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(__dirname, "data");
 const DB_FILE = path.join(DATA_DIR, "stumng.sqlite");
 const PUBLIC_DIR = path.join(__dirname, "public");
 const PORT = Number(process.env.PORT || 3000);
@@ -19,6 +19,12 @@ const ADMIN_NAME = process.env.ADMIN_NAME || "系统管理员";
 const LOG_HOT_DAYS = 14;
 const LOG_RETENTION_DAYS = 180;
 const LOG_MAINTENANCE_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const MAX_REQUEST_BODY_BYTES = 64 * 1024;
+const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const BUSINESS_TIME_ZONE = "Asia/Shanghai";
+const AUTH_RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
+const AUTH_RATE_LIMIT_MAX = 30;
+const authAttempts = new Map();
 
 function loadEnvFile(filePath) {
   if (!existsSync(filePath)) return;
@@ -139,9 +145,16 @@ async function readDb() {
   const rows = openDatabase().prepare("SELECT collection, data FROM app_records").all();
   for (const row of rows) {
     if (!db[row.collection]) db[row.collection] = [];
-    db[row.collection].push(JSON.parse(row.data));
+    try {
+      db[row.collection].push(JSON.parse(row.data));
+    } catch {
+      console.warn(`已跳过损坏的数据记录：${row.collection}`);
+    }
   }
-  if (ensureStudentCareCodes(db)) persistDb(openDatabase(), db);
+  const studentCodesChanged = ensureStudentCareCodes(db);
+  const classCodesChanged = ensureClassInviteCodes(db);
+  const sessionsChanged = pruneExpiredSessions(db);
+  if (studentCodesChanged || classCodesChanged || sessionsChanged) persistDb(openDatabase(), db);
   return db;
 }
 
@@ -195,12 +208,14 @@ async function initConfiguredAdmin() {
   const db = await readDb();
   const existing = db.users.find((item) => item.account === ADMIN_ACCOUNT);
   if (existing) {
+    const passwordChanged = !verifyPassword(ADMIN_PASSWORD, existing.passwordHash);
     existing.name = ADMIN_NAME;
     existing.phone = ADMIN_ACCOUNT;
     existing.role = "admin";
     existing.passwordHash = hashPassword(ADMIN_PASSWORD);
     existing.status = "active";
     existing.updatedAt = now();
+    if (passwordChanged) db.sessions = db.sessions.filter((item) => item.userId !== existing.id);
   } else {
     db.users.push({
       id: id("usr"),
@@ -228,6 +243,15 @@ function now() {
   return new Date().toISOString();
 }
 
+function businessToday() {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: BUSINESS_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).format(new Date());
+}
+
 function hashPassword(password, salt = crypto.randomBytes(16).toString("hex")) {
   const hash = crypto.pbkdf2Sync(password, salt, 100000, 32, "sha256").toString("hex");
   return `${salt}:${hash}`;
@@ -239,14 +263,49 @@ function verifyPassword(password, stored) {
 }
 
 function normalizeDate(value) {
-  if (!value) return new Date().toISOString().slice(0, 10);
-  return String(value).slice(0, 10);
+  if (!value) return businessToday();
+  const date = String(value).trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) fail(400, "日期格式必须为 YYYY-MM-DD");
+  const [year, month, day] = date.split("-").map(Number);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  if (parsed.getUTCFullYear() !== year || parsed.getUTCMonth() !== month - 1 || parsed.getUTCDate() !== day) fail(400, "日期无效");
+  return date;
+}
+
+function textInput(value, fieldName, maxLength, required = false) {
+  const text = String(value ?? "").trim();
+  if (required && !text) fail(400, `${fieldName}不能为空`);
+  if (text.length > maxLength) fail(400, `${fieldName}不能超过 ${maxLength} 个字符`);
+  return text;
+}
+
+function pruneExpiredSessions(db) {
+  const nowMs = Date.now();
+  const cutoff = nowMs - SESSION_TTL_MS;
+  const sessions = db.sessions.filter((session) => {
+    const timestamp = Date.parse(session.expiresAt || session.createdAt);
+    return Number.isFinite(timestamp) && (session.expiresAt ? timestamp > nowMs : timestamp > cutoff);
+  });
+  if (sessions.length === db.sessions.length) return false;
+  db.sessions = sessions;
+  return true;
 }
 
 function cleanUser(user) {
   if (!user) return null;
   const { passwordHash, ...rest } = user;
   return rest;
+}
+
+function publicUser(user) {
+  if (!user) return null;
+  return { id: user.id, name: user.name, role: user.role, status: user.status };
+}
+
+function parentClass(classItem) {
+  if (!classItem) return null;
+  const { teacherInviteCode, teacherInviteCodeEnabled, ...safe } = classItem;
+  return safe;
 }
 
 function makeClassCode(db) {
@@ -256,9 +315,21 @@ function makeClassCode(db) {
     for (let i = 0; i < 6; i += 1) {
       code += alphabet[Math.floor(Math.random() * alphabet.length)];
     }
-    if (!db.classes.some((item) => item.classCode === code)) return code;
+    if (!db.classes.some((item) => item.classCode === code || item.teacherInviteCode === code)) return code;
   }
   throw Object.assign(new Error("班级编号生成失败"), { status: 500 });
+}
+
+function ensureClassInviteCodes(db) {
+  let changed = false;
+  for (const classItem of db.classes) {
+    if (!classItem.teacherInviteCode) {
+      classItem.teacherInviteCode = makeClassCode(db);
+      classItem.teacherInviteCodeEnabled = true;
+      changed = true;
+    }
+  }
+  return changed;
 }
 
 function send(res, status, body, headers = jsonHeaders) {
@@ -270,12 +341,33 @@ function fail(status, message) {
   throw Object.assign(new Error(message), { status });
 }
 
+function enforceAuthRateLimit(req) {
+  const key = req.socket.remoteAddress || "unknown";
+  const currentTime = Date.now();
+  if (authAttempts.size > 10000) {
+    for (const [address, timestamps] of authAttempts) {
+      if (!timestamps.some((timestamp) => currentTime - timestamp < AUTH_RATE_LIMIT_WINDOW_MS)) authAttempts.delete(address);
+    }
+  }
+  const recent = (authAttempts.get(key) || []).filter((timestamp) => currentTime - timestamp < AUTH_RATE_LIMIT_WINDOW_MS);
+  if (recent.length >= AUTH_RATE_LIMIT_MAX) fail(429, "登录或注册尝试过多，请稍后再试");
+  recent.push(currentTime);
+  authAttempts.set(key, recent);
+}
+
 async function readBody(req) {
   const chunks = [];
-  for await (const chunk of req) chunks.push(chunk);
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > MAX_REQUEST_BODY_BYTES) fail(413, "请求内容不能超过 64KB");
+    chunks.push(chunk);
+  }
   if (!chunks.length) return {};
   try {
-    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    if (!body || Array.isArray(body) || typeof body !== "object") fail(400, "请求体必须是 JSON 对象");
+    return body;
   } catch {
     fail(400, "请求体必须是 JSON");
   }
@@ -292,6 +384,9 @@ function currentUser(db, req) {
   if (!token) return null;
   const session = db.sessions.find((item) => item.token === token);
   if (!session) return null;
+  const expiresAt = Date.parse(session.expiresAt || session.createdAt);
+  const validUntil = session.expiresAt ? expiresAt : expiresAt + SESSION_TTL_MS;
+  if (!Number.isFinite(validUntil) || validUntil <= Date.now()) return null;
   return db.users.find((item) => item.id === session.userId && item.status === "active") || null;
 }
 
@@ -322,12 +417,14 @@ function teacherClassRole(db, userId, classId) {
 
 function canAccessStudent(db, user, studentId) {
   if (user.role === "admin") return true;
+  const student = db.students.find((item) => item.id === studentId && item.status !== "removed");
+  if (!student) return false;
   if (user.role === "parent") {
     return db.parentStudentRelations.some((item) => item.parentUserId === user.id && item.studentId === studentId);
   }
   if (user.role === "teacher") {
     const classIds = teacherClassIds(db, user.id);
-    return db.students.some((item) => item.id === studentId && classIds.includes(item.classId));
+    return classIds.includes(student.classId);
   }
   return false;
 }
@@ -355,7 +452,7 @@ function decorateClassForUser(db, classItem, user) {
       id: relation.id,
       role: relation.role || "owner",
       teacherUserId: relation.teacherUserId,
-      teacher: cleanUser(db.users.find((item) => item.id === relation.teacherUserId)),
+      teacher: publicUser(db.users.find((item) => item.id === relation.teacherUserId)),
       createdAt: relation.createdAt
     }))
   };
@@ -568,6 +665,13 @@ function decorateOperationLog(db, log) {
   };
 }
 
+function operationLogForUser(db, log, user) {
+  const decorated = decorateOperationLog(db, log);
+  if (user.role === "admin") return decorated;
+  const { ip, userAgent, beforeData, afterData, ...safe } = decorated;
+  return safe;
+}
+
 function logOperation(db, req, user, action, objectType, objectId, beforeData, afterData, meta = {}) {
   db.operationLogs.unshift({
     id: id("log"),
@@ -591,17 +695,17 @@ function routeKey(method, pathname) {
   return `${method.toUpperCase()} ${pathname}`;
 }
 
-async function handleApi(req, res, pathname, searchParams) {
+async function handleApi(req, res, pathname, searchParams, body = {}) {
   const db = await readDb();
-  const body = ["POST", "PUT", "PATCH", "DELETE"].includes(req.method || "") ? await readBody(req) : {};
   const key = routeKey(req.method, pathname);
 
   if (key === "POST /api/auth/register") {
-    const account = String(body.account || "").trim();
+    enforceAuthRateLimit(req);
+    const account = textInput(body.account, "账号", 64, true);
     const password = String(body.password || "");
-    const name = String(body.name || "").trim();
+    const name = textInput(body.name, "姓名", 50, true);
     const role = String(body.role || "");
-    if (!account || !password || !name) fail(400, "账号、密码和姓名不能为空");
+    if (password.length < 6 || password.length > 128) fail(400, "密码长度必须为 6 到 128 位");
     if (!["teacher", "parent"].includes(role)) fail(400, "注册身份只能是教师或家长");
     if (db.users.some((item) => item.account === account)) fail(409, "账号已存在");
     const user = {
@@ -623,13 +727,15 @@ async function handleApi(req, res, pathname, searchParams) {
   }
 
   if (key === "POST /api/auth/login") {
-    const account = String(body.account || "").trim();
+    enforceAuthRateLimit(req);
+    const account = textInput(body.account, "账号", 64, true);
     const password = String(body.password || "");
+    if (password.length > 128) fail(400, "密码不能超过 128 位");
     const user = db.users.find((item) => item.account === account && item.status === "active");
     if (!user || !verifyPassword(password, user.passwordHash)) fail(401, "账号或密码错误");
     const token = crypto.randomBytes(32).toString("hex");
     db.sessions = db.sessions.filter((item) => item.userId !== user.id);
-    db.sessions.push({ token, userId: user.id, createdAt: now() });
+    db.sessions.push({ token, userId: user.id, createdAt: now(), expiresAt: new Date(Date.now() + SESSION_TTL_MS).toISOString() });
     await writeDb(db);
     return send(res, 200, { token, user: cleanUser(user) });
   }
@@ -647,7 +753,7 @@ async function handleApi(req, res, pathname, searchParams) {
     const students = user.role === "parent"
       ? db.parentStudentRelations
           .filter((rel) => rel.parentUserId === user.id)
-          .map((rel) => db.students.find((student) => student.id === rel.studentId))
+          .map((rel) => db.students.find((student) => student.id === rel.studentId && student.status !== "removed"))
           .filter(Boolean)
       : [];
     return send(res, 200, { user: cleanUser(user), classes, students });
@@ -657,14 +763,18 @@ async function handleApi(req, res, pathname, searchParams) {
 
   if (key === "POST /api/classes") {
     requireRole(user, ["teacher", "admin"]);
-    const className = String(body.className || "").trim();
-    if (!className) fail(400, "班级名称不能为空");
+    const className = textInput(body.className, "班级名称", 100, true);
+    const classCode = makeClassCode(db);
+    let teacherInviteCode = makeClassCode(db);
+    while (teacherInviteCode === classCode) teacherInviteCode = makeClassCode(db);
     const classItem = {
       id: id("cls"),
       className,
-      classCode: makeClassCode(db),
+      classCode,
       classCodeEnabled: true,
-      grade: String(body.grade || "").trim(),
+      teacherInviteCode,
+      teacherInviteCodeEnabled: true,
+      grade: textInput(body.grade, "年级", 50),
       status: "active",
       createdTeacherId: user.id,
       createdAt: now(),
@@ -685,10 +795,9 @@ async function handleApi(req, res, pathname, searchParams) {
 
   if (key === "POST /api/classes/join-by-code") {
     requireRole(user, ["teacher", "admin"]);
-    const classCode = String(body.classCode || "").trim().toUpperCase();
-    if (!classCode) fail(400, "班级编号不能为空");
-    const classItem = db.classes.find((item) => item.classCode === classCode && item.classCodeEnabled && item.status === "active");
-    if (!classItem) fail(404, "班级编号无效或已停用");
+    const classCode = textInput(body.classCode, "教师邀请码", 32, true).toUpperCase();
+    const classItem = db.classes.find((item) => item.teacherInviteCode === classCode && item.teacherInviteCodeEnabled !== false && item.status === "active");
+    if (!classItem) fail(404, "教师邀请码无效或已停用");
     let relation = teacherClassRelation(db, user.id, classItem.id);
     if (!relation) {
       relation = {
@@ -720,9 +829,11 @@ async function handleApi(req, res, pathname, searchParams) {
     const target = db.users.find((item) => item.id === userStatus[1]);
     if (!target) fail(404, "用户不存在");
     if (target.id === user.id) fail(400, "不能停用当前登录管理员");
-    const status = body.status === "disabled" ? "disabled" : "active";
+    if (!["active", "disabled"].includes(body.status)) fail(400, "用户状态无效");
+    const status = body.status;
     const before = cleanUser(target);
     target.status = status;
+    if (status === "disabled") db.sessions = db.sessions.filter((item) => item.userId !== target.id);
     target.updatedAt = now();
     logOperation(db, req, user, "update_user_status", "user", target.id, before, cleanUser(target));
     await writeDb(db);
@@ -778,6 +889,35 @@ async function handleApi(req, res, pathname, searchParams) {
     return send(res, 200, { class: decorateClassForUser(db, classItem, user) });
   }
 
+  const teacherCodeRefresh = pathname.match(/^\/api\/classes\/([^/]+)\/teacher-code\/refresh$/);
+  if (req.method === "POST" && teacherCodeRefresh) {
+    requireRole(user, ["teacher", "admin"]);
+    const classItem = db.classes.find((item) => item.id === teacherCodeRefresh[1]);
+    if (!classItem) fail(404, "班级不存在");
+    if (!canManageClassSettings(db, user, classItem.id)) fail(403, "只有班级创建者可以刷新教师邀请码");
+    const before = { ...classItem };
+    classItem.teacherInviteCode = makeClassCode(db);
+    classItem.teacherInviteCodeEnabled = true;
+    classItem.updatedAt = now();
+    logOperation(db, req, user, "refresh_teacher_invite_code", "class", classItem.id, before, classItem);
+    await writeDb(db);
+    return send(res, 200, { class: decorateClassForUser(db, classItem, user) });
+  }
+
+  const teacherCodeDisable = pathname.match(/^\/api\/classes\/([^/]+)\/teacher-code\/disable$/);
+  if (req.method === "POST" && teacherCodeDisable) {
+    requireRole(user, ["teacher", "admin"]);
+    const classItem = db.classes.find((item) => item.id === teacherCodeDisable[1]);
+    if (!classItem) fail(404, "班级不存在");
+    if (!canManageClassSettings(db, user, classItem.id)) fail(403, "只有班级创建者可以停用教师邀请码");
+    const before = { ...classItem };
+    classItem.teacherInviteCodeEnabled = false;
+    classItem.updatedAt = now();
+    logOperation(db, req, user, "disable_teacher_invite_code", "class", classItem.id, before, classItem);
+    await writeDb(db);
+    return send(res, 200, { class: decorateClassForUser(db, classItem, user) });
+  }
+
   const classStudents = pathname.match(/^\/api\/classes\/([^/]+)\/students$/);
   if (req.method === "GET" && classStudents) {
     requireRole(user, ["teacher", "admin"]);
@@ -789,7 +929,7 @@ async function handleApi(req, res, pathname, searchParams) {
         ...student,
         parents: db.parentStudentRelations
           .filter((rel) => rel.studentId === student.id)
-          .map((rel) => ({ ...rel, parent: cleanUser(db.users.find((item) => item.id === rel.parentUserId)) }))
+          .map((rel) => ({ ...rel, parent: publicUser(db.users.find((item) => item.id === rel.parentUserId)) }))
       }));
     return send(res, 200, { students: decorateStudentsForTeacher(students, db) });
   }
@@ -810,12 +950,11 @@ async function handleApi(req, res, pathname, searchParams) {
   }
 
   if (key === "POST /api/students/bind-by-class-code") {
-    requireRole(user, ["parent", "admin"]);
-    const classCode = String(body.classCode || "").trim().toUpperCase();
-    const studentName = String(body.studentName || "").trim();
-    const studentNo = String(body.studentNo || "").trim();
-    const relationType = String(body.relationType || "监护人").trim();
-    if (!classCode || !studentName) fail(400, "班级编号和学生姓名不能为空");
+    requireRole(user, ["parent"]);
+    const classCode = textInput(body.classCode, "班级编号", 32, true).toUpperCase();
+    const studentName = textInput(body.studentName, "学生姓名", 50, true);
+    const studentNo = textInput(body.studentNo, "学号", 50);
+    const relationType = textInput(body.relationType || "监护人", "关系", 30, true);
     const classItem = db.classes.find((item) => item.classCode === classCode && item.classCodeEnabled && item.status === "active");
     if (!classItem) fail(404, "班级编号无效或已停用");
     const parentStudentIds = db.parentStudentRelations
@@ -833,12 +972,12 @@ async function handleApi(req, res, pathname, searchParams) {
       student = {
         id: id("stu"),
         name: studentName,
-        gender: String(body.gender || "").trim(),
+        gender: textInput(body.gender, "性别", 30),
         classId: classItem.id,
         studentNo,
         careCode: nextStudentCareCode(db, classItem.id, studentName),
         careCodeVersion: 2,
-        remark: String(body.remark || "").trim(),
+        remark: textInput(body.remark, "备注", 500),
         status: "active",
         createdAt: now(),
         updatedAt: now()
@@ -865,7 +1004,7 @@ async function handleApi(req, res, pathname, searchParams) {
     return send(res, alreadyBound ? 200 : 201, {
       student,
       relation,
-      class: classItem,
+      class: parentClass(classItem),
       createdStudent,
       matchedExistingStudent: false,
       alreadyBound
@@ -878,7 +1017,7 @@ async function handleApi(req, res, pathname, searchParams) {
         .filter((rel) => rel.parentUserId === user.id)
         .map((rel) => db.students.find((student) => student.id === rel.studentId && student.status !== "removed"))
         .filter(Boolean)
-        .map((student) => ({ ...student, class: db.classes.find((item) => item.id === student.classId) }));
+        .map((student) => ({ ...student, class: parentClass(db.classes.find((item) => item.id === student.classId)) }));
       return send(res, 200, { students: decorateStudentsForTeacher(students, db) });
     }
     if (user.role === "teacher") {
@@ -894,7 +1033,8 @@ async function handleApi(req, res, pathname, searchParams) {
     requireRole(user, ["admin"]);
     const student = db.students.find((item) => item.id === studentStatus[1]);
     if (!student) fail(404, "学生不存在");
-    const status = body.status === "removed" ? "removed" : "active";
+    if (!["active", "removed"].includes(body.status)) fail(400, "学生状态无效");
+    const status = body.status;
     const before = { ...student };
     student.status = status;
     student.updatedAt = now();
@@ -965,11 +1105,14 @@ async function handleApi(req, res, pathname, searchParams) {
     if (!studentId) fail(400, "studentId 不能为空");
     requireRole(user, ["parent", "teacher", "admin"]);
     if (!canAccessStudent(db, user, studentId)) fail(403, "没有学生权限");
+    if (!["normal", "leave"].includes(body.morningStatus) || !["normal", "leave"].includes(body.afternoonStatus)) {
+      fail(400, "出勤状态无效");
+    }
     const payload = {
-      morningStatus: body.morningStatus === "leave" ? "leave" : "normal",
-      afternoonStatus: body.afternoonStatus === "leave" ? "leave" : "normal",
-      morningRemark: String(body.morningRemark || "").trim(),
-      afternoonRemark: String(body.afternoonRemark || "").trim()
+      morningStatus: body.morningStatus,
+      afternoonStatus: body.afternoonStatus,
+      morningRemark: textInput(body.morningRemark, "上午备注", 500),
+      afternoonRemark: textInput(body.afternoonRemark, "下午备注", 500)
     };
     let attendance = db.attendanceRecords.find((item) => item.studentId === studentId && item.date === date);
     const before = attendance ? { ...attendance } : null;
@@ -1008,14 +1151,15 @@ async function handleApi(req, res, pathname, searchParams) {
     requireRole(user, ["parent", "teacher", "admin"]);
     const studentId = String(body.studentId || "");
     const date = normalizeDate(body.date);
-    if (!studentId || !String(body.title || "").trim()) fail(400, "学生和任务标题不能为空");
+    const title = textInput(body.title, "任务标题", 200, true);
+    if (!studentId) fail(400, "学生不能为空");
     if (!canAccessStudent(db, user, studentId)) fail(403, "没有学生权限");
     const task = {
       id: id("tsk"),
       studentId,
       date,
-      title: String(body.title).trim(),
-      content: String(body.content || "").trim(),
+      title,
+      content: textInput(body.content, "任务内容", 2000),
       teacherRemark: "",
       teacherRemarkBy: null,
       teacherRemarkAt: null,
@@ -1043,11 +1187,10 @@ async function handleApi(req, res, pathname, searchParams) {
     if (!canAccessStudent(db, user, task.studentId)) fail(403, "没有学生权限");
     if (user.role !== "admin" && task.createdBy !== user.id) fail(403, "只能修改自己创建的任务");
     if (user.role !== "admin" && taskStatus(task) === "completed") fail(403, "已完成任务不能修改");
-    const title = String(body.title ?? "").trim();
-    if (!title) fail(400, "任务标题不能为空");
+    const title = textInput(body.title, "任务标题", 200, true);
     const before = { ...task };
     task.title = title;
-    task.content = String(body.content ?? task.content).trim();
+    task.content = textInput(body.content ?? task.content, "任务内容", 2000);
     task.lastModifiedBy = user.id;
     task.updatedAt = now();
     logOperation(db, req, user, "update_task", "task", task.id, before, task, { studentId: task.studentId, date: task.date });
@@ -1062,7 +1205,7 @@ async function handleApi(req, res, pathname, searchParams) {
     if (!task) fail(404, "任务不存在");
     if (!canAccessStudent(db, user, task.studentId)) fail(403, "没有学生权限");
     const before = { ...task };
-    task.teacherRemark = String(body.teacherRemark || "").trim();
+    task.teacherRemark = textInput(body.teacherRemark, "教师批注", 2000);
     task.teacherRemarkBy = task.teacherRemark ? user.id : null;
     task.teacherRemarkAt = task.teacherRemark ? now() : null;
     task.lastModifiedBy = user.id;
@@ -1095,7 +1238,9 @@ async function handleApi(req, res, pathname, searchParams) {
     if (!task) fail(404, "任务不存在");
     if (!canAccessStudent(db, user, task.studentId)) fail(403, "没有学生权限");
     const before = { ...task };
-    const status = body.status === "completed" || body.completed === true ? "completed" : "pending";
+    if (body.status !== undefined && !["pending", "completed"].includes(body.status)) fail(400, "任务状态无效");
+    if (body.status === undefined && typeof body.completed !== "boolean") fail(400, "任务状态无效");
+    const status = body.status || (body.completed ? "completed" : "pending");
     task.status = status;
     task.completed = status === "completed";
     task.completedBy = task.completed ? user.id : null;
@@ -1111,11 +1256,10 @@ async function handleApi(req, res, pathname, searchParams) {
     requireRole(user, ["admin"]);
     const startDate = String(searchParams.get("startDate") || "");
     const endDate = String(searchParams.get("endDate") || "");
-    if ((startDate && !/^\d{4}-\d{2}-\d{2}$/.test(startDate)) || (endDate && !/^\d{4}-\d{2}-\d{2}$/.test(endDate))) {
-      fail(400, "日期格式必须为 YYYY-MM-DD");
-    }
-    const startValue = startDate ? new Date(`${startDate}T00:00:00.000Z`) : new Date(Date.now() - LOG_RETENTION_DAYS * 24 * 60 * 60 * 1000);
-    const endValue = endDate ? new Date(`${endDate}T23:59:59.999Z`) : new Date();
+    if (startDate) normalizeDate(startDate);
+    if (endDate) normalizeDate(endDate);
+    const startValue = startDate ? new Date(`${startDate}T00:00:00.000+08:00`) : new Date(Date.now() - LOG_RETENTION_DAYS * 24 * 60 * 60 * 1000);
+    const endValue = endDate ? new Date(`${endDate}T23:59:59.999+08:00`) : new Date();
     if (Number.isNaN(startValue.getTime()) || Number.isNaN(endValue.getTime())) fail(400, "日期无效");
     const startAt = startValue.toISOString();
     const endAt = endValue.toISOString();
@@ -1148,7 +1292,7 @@ async function handleApi(req, res, pathname, searchParams) {
     let logs = db.operationLogs;
     if (studentId) logs = logs.filter((item) => item.studentId === studentId);
     if (user.role !== "admin") {
-      logs = logs.filter((item) => !item.studentId || canAccessStudent(db, user, item.studentId) || item.operatorUserId === user.id);
+      logs = logs.filter((item) => item.operatorUserId === user.id || (item.studentId && canAccessStudent(db, user, item.studentId)));
     }
     logs.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
     const requestedOffset = Number(searchParams.get("offset"));
@@ -1157,7 +1301,7 @@ async function handleApi(req, res, pathname, searchParams) {
     const limit = Number.isFinite(requestedLimit) && requestedLimit > 0 ? Math.min(Math.floor(requestedLimit), 100) : 200;
     const page = logs.slice(offset, offset + limit);
     return send(res, 200, {
-      logs: page.map((log) => decorateOperationLog(db, log)),
+      logs: page.map((log) => operationLogForUser(db, log, user)),
       hotDays: LOG_HOT_DAYS,
       total: logs.length,
       offset,
@@ -1172,7 +1316,9 @@ async function handleApi(req, res, pathname, searchParams) {
 async function serveStatic(req, res, pathname) {
   const filePath = pathname === "/" ? path.join(PUBLIC_DIR, "index.html") : path.join(PUBLIC_DIR, pathname);
   const normalized = path.normalize(filePath);
-  if (!normalized.startsWith(PUBLIC_DIR)) return send(res, 403, "Forbidden", { "content-type": "text/plain; charset=utf-8" });
+  if (normalized !== PUBLIC_DIR && !normalized.startsWith(`${PUBLIC_DIR}${path.sep}`)) {
+    return send(res, 403, "Forbidden", { "content-type": "text/plain; charset=utf-8" });
+  }
   try {
     const content = await readFile(normalized);
     const contentType = staticTypes[path.extname(normalized)] || "application/octet-stream";
@@ -1183,11 +1329,21 @@ async function serveStatic(req, res, pathname) {
   }
 }
 
+let apiQueue = Promise.resolve();
+
+function serializeApi(work) {
+  const result = apiQueue.then(work, work);
+  apiQueue = result.catch(() => {});
+  return result;
+}
+
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
     if (url.pathname.startsWith("/api/")) {
-      await handleApi(req, res, url.pathname, url.searchParams);
+      const body = ["POST", "PUT", "PATCH", "DELETE"].includes(req.method || "") ? await readBody(req) : {};
+      const run = () => handleApi(req, res, url.pathname, url.searchParams, body);
+      await serializeApi(run);
       return;
     }
     await serveStatic(req, res, decodeURIComponent(url.pathname));

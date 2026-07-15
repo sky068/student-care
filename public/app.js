@@ -1,5 +1,19 @@
 const app = document.querySelector("#app");
 
+function formatBusinessDate(date = new Date()) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).format(date);
+}
+
+const archiveStart = new Date();
+archiveStart.setDate(archiveStart.getDate() - 180);
+let workspaceLoadGeneration = 0;
+const taskRemarkSaveQueues = new Map();
+
 const state = {
   token: localStorage.getItem("stm_token") || "",
   user: null,
@@ -8,7 +22,7 @@ const state = {
   selectedClassId: "",
   selectedStudentId: "",
   parentOnboardingDismissed: false,
-  date: new Date().toISOString().slice(0, 10),
+  date: formatBusinessDate(),
   tasks: [],
   attendance: null,
   logs: [],
@@ -16,8 +30,8 @@ const state = {
   adminUserRoleFilter: "all",
   adminStudentFilter: "all",
   adminLogView: "recent",
-  adminArchiveStartDate: new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
-  adminArchiveEndDate: new Date().toISOString().slice(0, 10),
+  adminArchiveStartDate: formatBusinessDate(archiveStart),
+  adminArchiveEndDate: formatBusinessDate(),
   adminArchiveLogs: [],
   adminRecentLogTotal: 0,
   adminRecentLogsHaveMore: false,
@@ -46,6 +60,8 @@ const labels = {
   reset_user_password: "重置用户密码",
   refresh_class_code: "刷新班级编号",
   disable_class_code: "停用班级编号",
+  refresh_teacher_invite_code: "刷新教师邀请码",
+  disable_teacher_invite_code: "停用教师邀请码",
   remove_student: "移除学生",
   bind_student_by_class_code: "通过班级编号绑定学生",
   update_student_status: "更新学生状态",
@@ -150,6 +166,8 @@ function toast(message) {
   if (!node) {
     node = document.createElement("div");
     node.className = "toast";
+    node.setAttribute("role", "status");
+    node.setAttribute("aria-live", "polite");
     document.body.appendChild(node);
   }
   node.textContent = message;
@@ -250,15 +268,15 @@ function renderAuth(mode = "login") {
           <form id="authForm" class="form-grid">
             <div class="field">
               <label>账号 / 手机号</label>
-              <input name="account" autocomplete="username" required />
+              <input name="account" autocomplete="username" maxlength="64" required />
             </div>
             <div class="field">
               <label>密码</label>
-              <input name="password" type="password" autocomplete="${mode === "login" ? "current-password" : "new-password"}" required />
+              <input name="password" type="password" minlength="${mode === "login" ? "1" : "6"}" maxlength="128" autocomplete="${mode === "login" ? "current-password" : "new-password"}" required />
             </div>
             <div class="field ${mode === "login" ? "hidden" : ""}">
               <label>姓名</label>
-              <input name="name" />
+              <input name="name" maxlength="50" />
             </div>
             <div class="field ${mode === "login" ? "hidden" : ""}">
               <label>身份</label>
@@ -300,6 +318,7 @@ function renderAuth(mode = "login") {
 
 async function loadWorkspaceData() {
   if (!state.user) return;
+  const generation = ++workspaceLoadGeneration;
   if (state.user.role === "admin") {
     const [users, classes, students, relations, logs] = await Promise.all([
       api("/api/users"),
@@ -308,6 +327,7 @@ async function loadWorkspaceData() {
       api("/api/parent-student-relations"),
       api("/api/operation-logs?limit=50&offset=0")
     ]);
+    if (generation !== workspaceLoadGeneration) return;
     state.adminData = {
       users: users.users || [],
       classes: classes.classes || [],
@@ -319,12 +339,14 @@ async function loadWorkspaceData() {
     state.adminRecentLogsHaveMore = Boolean(logs.hasMore);
   } else if (state.user.role === "teacher") {
     const classes = await api("/api/classes");
+    if (generation !== workspaceLoadGeneration) return;
     state.classes = classes.classes || [];
     if (!state.selectedClassId || !state.classes.some((item) => item.id === state.selectedClassId)) {
       state.selectedClassId = state.classes[0]?.id || "";
     }
     if (state.selectedClassId) {
       const result = await api(`/api/classes/${state.selectedClassId}/students`);
+      if (generation !== workspaceLoadGeneration) return;
       state.students = result.students || [];
       if (!state.selectedStudentId || !state.students.some((item) => item.id === state.selectedStudentId)) {
         state.selectedStudentId = state.students[0]?.id || "";
@@ -335,6 +357,7 @@ async function loadWorkspaceData() {
     }
   } else if (state.user.role === "parent") {
     const result = await api("/api/students");
+    if (generation !== workspaceLoadGeneration) return;
     state.students = result.students || [];
     if (!state.selectedStudentId || !state.students.some((item) => item.id === state.selectedStudentId)) {
       state.selectedStudentId = state.students[0]?.id || "";
@@ -344,11 +367,14 @@ async function loadWorkspaceData() {
   rememberWorkspaceSelection();
 
   if (state.selectedStudentId) {
+    const studentId = state.selectedStudentId;
+    const date = state.date;
     const [attendance, tasks, logs] = await Promise.all([
-      api(`/api/attendance?studentId=${state.selectedStudentId}&date=${state.date}`),
-      api(`/api/tasks?studentId=${state.selectedStudentId}&date=${state.date}`),
-      api(`/api/operation-logs?studentId=${state.selectedStudentId}`)
+      api(`/api/attendance?studentId=${studentId}&date=${date}`),
+      api(`/api/tasks?studentId=${studentId}&date=${date}`),
+      api(`/api/operation-logs?studentId=${studentId}`)
     ]);
+    if (generation !== workspaceLoadGeneration || studentId !== state.selectedStudentId || date !== state.date) return;
     state.attendance = attendance.attendance;
     state.tasks = tasks.tasks || [];
     state.logs = logs.logs || [];
@@ -942,20 +968,10 @@ function renderTaskPanel() {
   const canRemark = state.user.role === "teacher";
   return html`
     <section class="panel">
-      <h2>每日任务</h2>
-      ${canCreate ? html`
-        <form id="taskForm" class="three-col">
-          <div class="field">
-            <label>任务标题</label>
-            <input name="title" required />
-          </div>
-          <div class="field">
-            <label>任务内容</label>
-            <input name="content" />
-          </div>
-          <button class="primary" type="submit">添加</button>
-        </form>
-      ` : ""}
+      <div class="task-panel-header">
+        <h2>每日任务</h2>
+        ${canCreate ? `<button class="primary" type="button" data-action="show-create-task">新建任务</button>` : ""}
+      </div>
       <div class="list task-list" style="margin-top:14px;">
         ${state.tasks.length ? state.tasks.map((task) => html`
           <div class="item task-card">
@@ -1013,6 +1029,74 @@ function renderTaskPanel() {
       </div>
     </section>
   `;
+}
+
+function renderCreateTaskDialog() {
+  const selectedStudent = state.students.find((item) => item.id === state.selectedStudentId);
+  if (!selectedStudent) return;
+  const dialog = document.createElement("div");
+  dialog.className = "modal-backdrop";
+  const closeDialog = () => {
+    document.removeEventListener("keydown", handleKeydown);
+    dialog.remove();
+  };
+  const handleKeydown = (event) => {
+    if (event.key === "Escape") closeDialog();
+  };
+  dialog.innerHTML = html`
+    <div class="modal task-form-modal">
+      <div class="item-title">
+        <h3 style="margin:0;">新建任务</h3>
+        <button class="text" type="button" data-modal-close>关闭</button>
+      </div>
+      <div class="notice task-dialog-context">
+        <strong>${escapeHtml(studentListName(selectedStudent))}</strong>
+        <span>${escapeHtml(state.date)}</span>
+      </div>
+      <form id="createTaskForm" class="form-grid" style="margin-top:14px;">
+        <div class="field">
+          <label>任务标题</label>
+          <input name="title" required />
+        </div>
+        <div class="field">
+          <label>任务内容</label>
+          <textarea name="content" placeholder="选填"></textarea>
+        </div>
+        <button class="primary" type="submit">创建任务</button>
+      </form>
+    </div>
+  `;
+  document.body.appendChild(dialog);
+  document.addEventListener("keydown", handleKeydown);
+  dialog.querySelector("[data-modal-close]").addEventListener("click", closeDialog);
+  dialog.addEventListener("click", (event) => {
+    if (event.target === dialog) closeDialog();
+  });
+  dialog.querySelector("#createTaskForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const submitButton = event.currentTarget.querySelector("button[type='submit']");
+    submitButton.disabled = true;
+    submitButton.textContent = "创建中...";
+    try {
+      await api("/api/tasks", {
+        method: "POST",
+        body: {
+          ...formData(event.currentTarget),
+          studentId: state.selectedStudentId,
+          date: state.date
+        }
+      });
+      closeDialog();
+      toast("任务已添加");
+      await loadWorkspaceData();
+      renderApp();
+    } catch (error) {
+      submitButton.disabled = false;
+      submitButton.textContent = "创建任务";
+      toast(error.message);
+    }
+  });
+  dialog.querySelector("input[name='title']")?.focus();
 }
 
 function renderEditTaskDialog(task) {
@@ -1074,15 +1158,19 @@ function renderClassPanel() {
           <span class="badge ${classItem.teacherRole === "owner" ? "" : "warn"}">${classItem.teacherRole === "owner" ? "创建者" : "协同教师"}</span>
         </div>
         <p>加入状态：<span class="badge ${classItem.classCodeEnabled ? "" : "warn"}">${classItem.classCodeEnabled ? "可加入" : "已停用"}</span></p>
-        <p>班级编号：<strong>${escapeHtml(classItem.classCode)}</strong></p>
+        <p>家长绑定码：<strong>${escapeHtml(classItem.classCode)}</strong></p>
+        <p>教师邀请码：<strong>${escapeHtml(classItem.teacherInviteCode || "未生成")}</strong> <span class="badge ${classItem.teacherInviteCodeEnabled !== false ? "" : "warn"}">${classItem.teacherInviteCodeEnabled !== false ? "可加入" : "已停用"}</span></p>
         <div class="actions" style="margin-top:10px;">
           <button data-action="refresh-class-code" ${isOwner ? "" : "disabled"}>刷新编号</button>
           <button data-action="copy-class-code" data-class-code="${escapeAttr(classItem.classCode)}">复制编号</button>
+          <button data-action="copy-class-code" data-class-code="${escapeAttr(classItem.teacherInviteCode || "")}">复制教师邀请码</button>
+          <button data-action="refresh-teacher-code" ${isOwner ? "" : "disabled"}>刷新教师邀请码</button>
+          <button class="danger" data-action="disable-teacher-code" ${isOwner ? "" : "disabled"}>停用教师邀请码</button>
           <button class="danger" data-action="disable-class-code" ${isOwner ? "" : "disabled"}>停用编号</button>
         </div>
         ${isOwner ? "" : `<p class="muted">只有班级创建者可以刷新或停用班级编号。</p>`}
       </div>
-      <div class="muted" style="margin-top:12px;">家长和协同教师都可以使用班级编号加入，权限由登录身份决定。</div>
+      <div class="muted" style="margin-top:12px;">家长绑定码仅供家长添加孩子；协同教师必须使用单独的教师邀请码。</div>
       ${classItem.teachers?.length ? html`
         <h3 style="margin-top:18px;">教师</h3>
         <div class="list">
@@ -1180,7 +1268,7 @@ function renderClassSettingsDialog() {
     }
   });
   dialog.querySelector("[data-action='disable-class-code']")?.addEventListener("click", async () => {
-    const confirmed = window.confirm("确定要停用当前班级编号吗？停用后家长和协同教师将无法继续使用该编号加入。");
+    const confirmed = window.confirm("确定要停用当前家长绑定码吗？停用后家长将无法继续使用该编号添加孩子。");
     if (!confirmed) return;
     try {
       await api(`/api/classes/${state.selectedClassId}/code/disable`, { method: "POST" });
@@ -1192,13 +1280,38 @@ function renderClassSettingsDialog() {
       toast(error.message);
     }
   });
-  dialog.querySelector("[data-action='copy-class-code']")?.addEventListener("click", async (event) => {
+  dialog.querySelector("[data-action='refresh-teacher-code']")?.addEventListener("click", async () => {
     try {
-      await copyText(event.currentTarget.dataset.classCode);
-      toast("班级编号已复制");
-    } catch {
-      toast("复制失败，请手动复制编号");
+      await api(`/api/classes/${state.selectedClassId}/teacher-code/refresh`, { method: "POST" });
+      toast("教师邀请码已刷新");
+      dialog.remove();
+      await loadWorkspaceData();
+      renderApp();
+    } catch (error) {
+      toast(error.message);
     }
+  });
+  dialog.querySelector("[data-action='disable-teacher-code']")?.addEventListener("click", async () => {
+    if (!window.confirm("确定停用教师邀请码吗？停用后新的协同教师将无法加入。")) return;
+    try {
+      await api(`/api/classes/${state.selectedClassId}/teacher-code/disable`, { method: "POST" });
+      toast("教师邀请码已停用");
+      dialog.remove();
+      await loadWorkspaceData();
+      renderApp();
+    } catch (error) {
+      toast(error.message);
+    }
+  });
+  dialog.querySelectorAll("[data-action='copy-class-code']").forEach((button) => {
+    button.addEventListener("click", async (event) => {
+      try {
+        await copyText(event.currentTarget.dataset.classCode);
+        toast("邀请码已复制");
+      } catch {
+        toast("复制失败，请手动复制");
+      }
+    });
   });
   dialog.querySelector("[data-action='show-create-class']").addEventListener("click", () => {
     dialog.remove();
@@ -1252,7 +1365,7 @@ function renderTeacherOnboarding() {
     <main class="auth-shell">
       <section class="auth-visual">
         <h1>创建或加入班级</h1>
-        <p>创建班级的教师是班级创建者，其他教师可通过班级编号加入协同管理。</p>
+        <p>创建班级的教师是班级创建者，其他教师可通过教师邀请码加入协同管理。</p>
       </section>
       <section class="auth-panel">
         <div class="auth-box form-grid">
@@ -1270,7 +1383,7 @@ function renderTeacherOnboarding() {
           <form id="joinClassForm" class="form-grid" style="margin-top:18px;">
             <div class="field">
               <label>加入已有班级</label>
-              <input name="classCode" placeholder="输入班级编号" required />
+              <input name="classCode" placeholder="输入教师邀请码" required />
             </div>
             <button type="submit">加入班级</button>
           </form>
@@ -1315,8 +1428,8 @@ function renderJoinClassDialog() {
       </div>
       <form id="joinClassDialogForm" class="form-grid" style="margin-top:14px;">
         <div class="field">
-          <label>班级编号</label>
-          <input name="classCode" placeholder="输入老师提供的班级编号" required />
+          <label>教师邀请码</label>
+          <input name="classCode" placeholder="输入班级创建者提供的教师邀请码" required />
         </div>
         <button class="primary" type="submit">加入</button>
       </form>
@@ -1778,27 +1891,10 @@ function bindAppEvents() {
     }
   });
 
-  document.querySelector("#taskForm")?.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    try {
-      await api("/api/tasks", {
-        method: "POST",
-        body: {
-          ...formData(event.currentTarget),
-          studentId: state.selectedStudentId,
-          date: state.date
-        }
-      });
-      toast("任务已添加");
-      await loadWorkspaceData();
-      renderApp();
-    } catch (error) {
-      toast(error.message);
-    }
-  });
-
   document.querySelectorAll("[data-task-completed]").forEach((checkbox) => {
     checkbox.addEventListener("change", async () => {
+      const previousChecked = !checkbox.checked;
+      checkbox.disabled = true;
       try {
         await api(`/api/tasks/${checkbox.dataset.taskCompleted}/completion`, {
           method: "PATCH",
@@ -1807,6 +1903,8 @@ function bindAppEvents() {
         await loadWorkspaceData();
         renderApp();
       } catch (error) {
+        checkbox.checked = previousChecked;
+        checkbox.disabled = false;
         toast(error.message);
       }
     });
@@ -1821,7 +1919,8 @@ function bindAppEvents() {
       return;
     }
     if (status) status.textContent = "保存中...";
-    try {
+    const previous = taskRemarkSaveQueues.get(taskId) || Promise.resolve();
+    const current = previous.catch(() => {}).then(async () => {
       await api(`/api/tasks/${taskId}/teacher-remark`, {
         method: "PATCH",
         body: { teacherRemark: value }
@@ -1829,10 +1928,16 @@ function bindAppEvents() {
       textarea.dataset.lastSaved = value;
       const task = state.tasks.find((item) => item.id === taskId);
       if (task) task.teacherRemark = value;
-      if (status) status.textContent = "已保存";
+      if (status && textarea.value === value) status.textContent = "已保存";
+    });
+    taskRemarkSaveQueues.set(taskId, current);
+    try {
+      await current;
     } catch (error) {
-      if (status) status.textContent = "保存失败";
+      if (status && textarea.value === value) status.textContent = "保存失败";
       toast(error.message);
+    } finally {
+      if (taskRemarkSaveQueues.get(taskId) === current) taskRemarkSaveQueues.delete(taskId);
     }
   };
 
@@ -1873,6 +1978,8 @@ function bindAppEvents() {
       if (task && canManageTask(task)) renderEditTaskDialog(task);
     });
   });
+
+  document.querySelector("[data-action='show-create-task']")?.addEventListener("click", renderCreateTaskDialog);
 
   document.querySelector("[data-action='copy-class-code']")?.addEventListener("click", async (event) => {
     try {

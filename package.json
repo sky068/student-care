@@ -6,10 +6,11 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
+    "test": "node --test tests/*.test.js",
     "seed:test": "node scripts/seed-test-data.js"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "dependencies": {
     "better-sqlite3": "^12.11.1"
