@@ -2,7 +2,7 @@
 
 简单 Web 版学生托管系统，后端使用原生 Node.js，数据默认写入 SQLite 数据库 `data/stumng.sqlite`。
 
-普通账号可以同时开通教师、家长身份并切换工作台；班级关系、孩子绑定、最近选择和任务操作权限均按当前身份隔离。
+普通账号可以同时开通教师、家长身份并切换工作台；班级关系、孩子绑定、最近选择和任务操作权限均按当前身份隔离，适配移动端。
 
 ## 启动
 
@@ -24,6 +24,8 @@ http://127.0.0.1:3000
 chmod +x scripts/deploy.sh
 ./scripts/deploy.sh deploy
 ```
+
+默认仅监听服务器本机；正式公网部署请先将域名解析到服务器，并使用 `DOMAIN=care.example.com ./scripts/deploy.sh deploy` 自动启用 HTTPS。
 
 完整的服务器准备、HTTPS、配置、备份、恢复和升级说明见 [部署说明](doc/部署说明.md)。
 
