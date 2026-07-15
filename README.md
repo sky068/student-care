@@ -66,3 +66,17 @@ npm run seed:test
 - 每个学生 2 条默认 `待完成` 任务
 
 脚本是幂等的，重复执行不会无限新增同一批测试数据。
+
+
+
+* 家长端截图:
+
+![image-20260715153409453](/Users/skyxu/Library/Application Support/typora-user-images/image-20260715153409453.png)
+
+* 教师端截图:
+
+![image-20260715154547615](/Users/skyxu/Library/Application Support/typora-user-images/image-20260715154547615.png)
+
+* 管理员端截图:
+
+![image-20260715154748136](/Users/skyxu/Library/Application Support/typora-user-images/image-20260715154748136.png)
