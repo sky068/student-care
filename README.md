@@ -64,11 +64,15 @@ npm run seed:test
 
 脚本会创建或更新：
 
-- 教师账号：`teacher_test / Test!1234`
-- 家长账号：`parent_test / Test!1234`
+- 创建教师：`teacher_owner_test / Test!1234`
+- 协同教师：`teacher_helper_test / Test!1234`
+- 家长一：`parent_one_test / Test!1234`
+- 家长二：`parent_two_test / Test!1234`
 - 班级：`测试一班`，班级编号 `TEST01`
-- 两个学生：`测试学生一`、`测试学生二`
-- 每个学生 2 条默认 `待完成` 任务
+- 家长一的孩子：`多多`、`小雨`
+- 家长二的孩子：`多多`、`小禾`
+- 两个 `多多` 用于验证班级内重名标识
+- 每个孩子 2 条默认 `待完成` 任务
 
 脚本是幂等的，重复执行不会无限新增同一批测试数据。
 

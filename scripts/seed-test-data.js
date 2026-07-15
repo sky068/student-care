@@ -130,34 +130,45 @@ db.pragma("journal_mode = WAL");
 ensureSchema(db);
 
 const store = readStore(db);
-const teacher = upsertUser(store, "teacher_test", "测试教师", "teacher");
-const parent = upsertUser(store, "parent_test", "测试家长", "parent");
+const ownerTeacher = upsertUser(store, "teacher_owner_test", "测试创建教师", "teacher");
+const helperTeacher = upsertUser(store, "teacher_helper_test", "测试协同教师", "teacher");
+const firstParent = upsertUser(store, "parent_one_test", "测试家长一", "parent");
+const secondParent = upsertUser(store, "parent_two_test", "测试家长二", "parent");
 
 const classItem = upsertById(store.classes, {
   id: "cls_test_001",
   className: "测试一班",
   classCode: "TEST01",
   classCodeEnabled: true,
+  teacherInviteCode: "TEACH1",
+  teacherInviteCodeEnabled: true,
   grade: "",
   status: "active",
-  createdTeacherId: teacher.id,
+  createdTeacherId: ownerTeacher.id,
   createdAt: now(),
   updatedAt: now()
 });
 
-if (!store.teacherClassRelations.some((item) => item.teacherUserId === teacher.id && item.classId === classItem.id)) {
-  store.teacherClassRelations.push({
-    id: "tcr_test_001",
-    teacherUserId: teacher.id,
-    classId: classItem.id,
-    role: "owner",
-    createdAt: now()
-  });
-}
+upsertById(store.teacherClassRelations, {
+  id: "tcr_test_owner",
+  teacherUserId: ownerTeacher.id,
+  classId: classItem.id,
+  role: "owner",
+  createdAt: now()
+});
+upsertById(store.teacherClassRelations, {
+  id: "tcr_test_helper",
+  teacherUserId: helperTeacher.id,
+  classId: classItem.id,
+  role: "teacher",
+  createdAt: now()
+});
 
 const studentSpecs = [
-  { id: "stu_test_001", name: "测试学生一", studentNo: "S001", careCode: "01" },
-  { id: "stu_test_002", name: "测试学生二", studentNo: "S002", careCode: "01" }
+  { id: "stu_test_001", parent: firstParent, name: "多多", studentNo: "P1001", careCode: "01", remark: "测试家长一的同名孩子" },
+  { id: "stu_test_002", parent: firstParent, name: "小雨", studentNo: "P1002", careCode: "01", remark: "测试家长一的孩子" },
+  { id: "stu_test_003", parent: secondParent, name: "多多", studentNo: "P2001", careCode: "02", remark: "测试家长二的同名孩子" },
+  { id: "stu_test_004", parent: secondParent, name: "小禾", studentNo: "P2002", careCode: "01", remark: "测试家长二的孩子" }
 ];
 
 for (const spec of studentSpecs) {
@@ -169,23 +180,21 @@ for (const spec of studentSpecs) {
     studentNo: spec.studentNo,
     careCode: spec.careCode,
     careCodeVersion: 2,
-    remark: "测试数据",
+    remark: spec.remark,
     status: "active",
     createdAt: now(),
     updatedAt: now()
   });
 
-  if (!store.parentStudentRelations.some((item) => item.parentUserId === parent.id && item.studentId === student.id)) {
-    store.parentStudentRelations.push({
-      id: `psr_${student.id}`,
-      parentUserId: parent.id,
-      studentId: student.id,
-      relationType: "监护人",
-      isPrimary: true,
-      source: "seed",
-      createdAt: now()
-    });
-  }
+  upsertById(store.parentStudentRelations, {
+    id: `psr_${student.id}`,
+    parentUserId: spec.parent.id,
+    studentId: student.id,
+    relationType: "监护人",
+    isPrimary: true,
+    source: "seed",
+    createdAt: now()
+  });
 
   const taskDate = new Date().toISOString().slice(0, 10);
   const tasks = [
@@ -205,9 +214,9 @@ for (const spec of studentSpecs) {
       teacherRemarkAt: null,
       status: "pending",
       completed: false,
-      createdBy: parent.id,
+      createdBy: spec.parent.id,
       createdByRole: "parent",
-      lastModifiedBy: parent.id,
+      lastModifiedBy: spec.parent.id,
       lastModifiedByRole: "parent",
       completedBy: null,
       completedByRole: null,
@@ -222,8 +231,12 @@ for (const spec of studentSpecs) {
 writeStore(db, store);
 
 console.log("测试数据已创建：");
-console.log("- 教师账号：teacher_test / Test!1234");
-console.log("- 家长账号：parent_test / Test!1234");
+console.log("- 创建教师：teacher_owner_test / Test!1234");
+console.log("- 协同教师：teacher_helper_test / Test!1234");
+console.log("- 家长一：parent_one_test / Test!1234");
+console.log("- 家长二：parent_two_test / Test!1234");
 console.log("- 班级：测试一班，班级编号 TEST01");
-console.log("- 学生：测试学生一、测试学生二");
-console.log("- 每个学生各 2 条待完成任务");
+console.log("- 家长一的孩子：多多、小雨");
+console.log("- 家长二的孩子：多多、小禾");
+console.log("- 两名多多用于验证班级内重名标识");
+console.log("- 每个孩子各 2 条待完成任务");
