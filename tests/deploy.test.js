@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -44,4 +44,11 @@ test("部署脚本拒绝所有已知示例管理员密码", async () => {
 
 test("部署脚本接受满足规则的强管理员密码", async () => {
   await assert.doesNotReject(validateDeployEnv("Admin!8a"));
+});
+
+test("Docker 构建可在预编译包不可用时编译 SQLite 依赖", async () => {
+  const dockerfile = await readFile(new URL("../Dockerfile", import.meta.url), "utf8");
+  assert.match(dockerfile, /FROM node:22-bookworm-slim AS dependencies/);
+  assert.match(dockerfile, /apt-get install -y --no-install-recommends python3 make g\+\+/);
+  assert.match(dockerfile, /COPY --from=dependencies --chown=node:node \/app\/node_modules \.\/node_modules/);
 });
