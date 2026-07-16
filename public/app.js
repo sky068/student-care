@@ -14,6 +14,7 @@ archiveStart.setDate(archiveStart.getDate() - 180);
 let workspaceLoadGeneration = 0;
 let authGeneration = 0;
 const taskRemarkSaveQueues = new Map();
+const childRemarkSaveQueues = new Map();
 
 const state = {
   token: localStorage.getItem("stm_token") || "",
@@ -69,6 +70,7 @@ const labels = {
   remove_student: "移除学生",
   bind_student_by_class_code: "通过班级编号绑定学生",
   update_student_status: "更新学生状态",
+  update_student_remark: "修改孩子备注",
   create_parent_student_relation: "绑定家长学生关系",
   unbind_parent_student: "解绑家长学生关系",
   create_attendance: "创建出勤",
@@ -1523,7 +1525,11 @@ function renderChildPanel() {
             <span>${escapeHtml(student.name)}</span>
             <span class="badge">${escapeHtml(student.class?.className || "班级")}</span>
           </div>
-          <p>备注：${escapeHtml(student.remark || "未填写")}</p>
+          <div class="child-remark-editor" data-child-remark-editor data-child-id="${escapeAttr(student.id)}">
+            <label for="childRemark">备注</label>
+            <textarea id="childRemark" maxlength="500" data-last-saved="${escapeAttr(student.remark || "")}" placeholder="选填，例如过敏信息或接送说明">${escapeHtml(student.remark || "")}</textarea>
+            <span class="muted child-remark-status" data-child-remark-status aria-live="polite">修改后自动保存</span>
+          </div>
         </div>
       ` : `<div class="notice">暂无绑定孩子</div>`}
     </section>
@@ -2126,7 +2132,7 @@ function bindAppEvents() {
     }
   });
 
-  document.querySelectorAll("[data-student-id]").forEach((button) => {
+  document.querySelectorAll(".student-picker-option[data-student-id]").forEach((button) => {
     button.addEventListener("click", async () => {
       closeStudentPicker();
       const previousStudentId = state.selectedStudentId;
@@ -2159,6 +2165,58 @@ function bindAppEvents() {
     } catch (error) {
       toast(error.message);
     }
+  });
+
+  const childRemarkEditor = document.querySelector("[data-child-remark-editor]");
+  const childRemarkInput = childRemarkEditor?.querySelector("textarea");
+  const childRemarkStatus = childRemarkEditor?.querySelector("[data-child-remark-status]");
+  const saveChildRemark = () => {
+    if (!childRemarkEditor || !childRemarkInput) return Promise.resolve();
+    const studentId = childRemarkEditor.dataset.childId;
+    const value = childRemarkInput.value.trim();
+    const pendingSave = childRemarkSaveQueues.get(studentId);
+    if (value === childRemarkInput.dataset.lastSaved && !pendingSave) {
+      if (childRemarkStatus) childRemarkStatus.textContent = "已保存";
+      return Promise.resolve();
+    }
+    if (value === childRemarkInput.dataset.pendingValue) return pendingSave || Promise.resolve();
+    childRemarkInput.dataset.pendingValue = value;
+    if (childRemarkStatus) childRemarkStatus.textContent = "保存中...";
+
+    const request = async () => {
+      try {
+        await api(`/api/students/${studentId}/remark`, { method: "PATCH", body: { remark: value } });
+        childRemarkInput.dataset.lastSaved = value;
+        const student = state.students.find((item) => item.id === studentId);
+        if (student) student.remark = value;
+        if (childRemarkInput.value.trim() === value) {
+          if (childRemarkStatus) childRemarkStatus.textContent = "已保存";
+          toast("孩子备注保存成功");
+        }
+      } catch (error) {
+        if (childRemarkStatus) childRemarkStatus.textContent = "保存失败，请继续修改后重试";
+        toast(error.message);
+      } finally {
+        if (childRemarkInput.dataset.pendingValue === value) delete childRemarkInput.dataset.pendingValue;
+      }
+    };
+    const previous = pendingSave || Promise.resolve();
+    const queued = previous.then(request, request);
+    const tracked = queued.finally(() => {
+      if (childRemarkSaveQueues.get(studentId) === tracked) childRemarkSaveQueues.delete(studentId);
+    });
+    childRemarkSaveQueues.set(studentId, tracked);
+    return queued;
+  };
+
+  childRemarkInput?.addEventListener("input", () => {
+    if (childRemarkStatus) childRemarkStatus.textContent = "等待自动保存...";
+    window.clearTimeout(childRemarkInput.saveTimer);
+    childRemarkInput.saveTimer = window.setTimeout(saveChildRemark, 1000);
+  });
+  childRemarkInput?.addEventListener("blur", () => {
+    window.clearTimeout(childRemarkInput.saveTimer);
+    saveChildRemark();
   });
 
   document.querySelectorAll("[data-task-completed]").forEach((checkbox) => {

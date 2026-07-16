@@ -766,6 +766,22 @@ textarea:focus {
   min-height: 110px;
 }
 
+.child-remark-editor {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.child-remark-editor textarea {
+  min-height: 72px;
+}
+
+.child-remark-status {
+  min-height: 18px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .task-form-modal {
   max-height: calc(100vh - 36px);
   max-height: calc(100svh - 36px);
