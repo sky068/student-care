@@ -1229,6 +1229,15 @@ function renderTaskPanel() {
   `;
 }
 
+function renderTaskDialogContext(student, date) {
+  return html`
+    <div class="notice task-dialog-context">
+      <strong>${escapeHtml(studentListName(student))}</strong>
+      <span>${escapeHtml(date)}</span>
+    </div>
+  `;
+}
+
 function renderCreateTaskDialog(trigger = null) {
   const selectedStudent = state.students.find((item) => item.id === state.selectedStudentId);
   if (!selectedStudent) return;
@@ -1240,10 +1249,7 @@ function renderCreateTaskDialog(trigger = null) {
         <h3 id="createTaskDialogTitle" style="margin:0;">新建任务</h3>
         <button class="text" type="button" data-modal-close>关闭</button>
       </div>
-      <div class="notice task-dialog-context">
-        <strong>${escapeHtml(studentListName(selectedStudent))}</strong>
-        <span>${escapeHtml(state.date)}</span>
-      </div>
+      ${renderTaskDialogContext(selectedStudent, state.date)}
       <form id="createTaskForm" class="form-grid" style="margin-top:14px;">
         <div class="field">
           <label for="createTaskTitle">任务标题</label>
@@ -1289,6 +1295,8 @@ function renderCreateTaskDialog(trigger = null) {
 }
 
 function renderEditTaskDialog(task, trigger = null) {
+  const selectedStudent = state.students.find((item) => item.id === task.studentId);
+  if (!selectedStudent) return;
   const dialog = document.createElement("div");
   dialog.className = "modal-backdrop";
   dialog.innerHTML = html`
@@ -1297,6 +1305,7 @@ function renderEditTaskDialog(task, trigger = null) {
         <h3 id="editTaskDialogTitle" style="margin:0;">编辑任务</h3>
         <button class="text" type="button" data-modal-close>关闭</button>
       </div>
+      ${renderTaskDialogContext(selectedStudent, task.date)}
       <form id="editTaskForm" class="form-grid" style="margin-top:14px;">
         <div class="field">
           <label for="editTaskTitle">任务标题</label>
